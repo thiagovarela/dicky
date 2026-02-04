@@ -8,22 +8,32 @@
 import { strict as assert } from "node:assert";
 import { Dicky, service } from "@dicky/dicky";
 import type { InvocationStatus, JournalEntry } from "@dicky/dicky";
+import { z } from "zod";
 import { createConfig, delay, withCleanup } from "./setup";
 
 const config = createConfig("ex-06");
-const dicky = new Dicky(config);
 
 type ApprovalDecision = { status: string };
 
 type ApprovalResult = { orderId: string; decision: ApprovalDecision };
 
-dicky.use(
+const requestSchema = z.object({ orderId: z.string() });
+
+type RequestArgs = z.infer<typeof requestSchema>;
+
+const dicky = new Dicky(config).use(
   service("approval", {
-    request: async (ctx, args: unknown) => {
-      const { orderId } = args as { orderId: string };
-      const [, promise] = await ctx.awakeable<ApprovalDecision>("approval");
-      const decision = await promise;
-      return { orderId, decision } satisfies ApprovalResult;
+    request: {
+      input: requestSchema,
+      output: z.object({
+        orderId: z.string(),
+        decision: z.object({ status: z.string() }),
+      }),
+      handler: async (ctx, { orderId }: RequestArgs) => {
+        const [, promise] = await ctx.awakeable<ApprovalDecision>("approval");
+        const decision = await promise;
+        return { orderId, decision } satisfies ApprovalResult;
+      },
     },
   }),
 );

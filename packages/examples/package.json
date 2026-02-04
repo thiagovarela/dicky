@@ -9,7 +9,8 @@
     "list": "ls src/*.ts | grep -v setup | xargs -n1 basename .ts"
   },
   "dependencies": {
-    "@dicky/dicky": "workspace:*"
+    "@dicky/dicky": "workspace:*",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "bun-types": "^1.3.8"

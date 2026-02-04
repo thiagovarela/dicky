@@ -1,19 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { object } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
   waitForInvocation,
 } from "./setup";
 
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
-
 (integrationEnabled ? describe : describe.skip)("Integration: Virtual Objects", () => {
   const prefix = "test:objects:";
+  const emptySchema = z.object({});
 
   beforeAll(async () => {
     await startRedis();
@@ -32,13 +33,21 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
       object("counter", {
         initial: { count: 0 },
         handlers: {
-          increment: async (ctx) => {
-            const current = (ctx.state as { count: number }).count;
-            const next = current + 1;
-            await ctx.setState({ count: next });
-            return next;
+          increment: {
+            input: emptySchema,
+            output: z.number(),
+            handler: async (ctx, _args: {}) => {
+              const current = (ctx.state as { count: number }).count;
+              const next = current + 1;
+              await ctx.setState({ count: next });
+              return next;
+            },
           },
-          getCount: async (ctx) => (ctx.state as { count: number }).count,
+          getCount: {
+            input: emptySchema,
+            output: z.number(),
+            handler: async (ctx, _args: {}) => (ctx.state as { count: number }).count,
+          },
         },
       }),
     );

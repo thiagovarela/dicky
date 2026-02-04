@@ -1,21 +1,22 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { service } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
   delay,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
   waitForInvocation,
 } from "./setup";
 
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
-
 (integrationEnabled ? describe : describe.skip)("Integration: Dispatch Flow", () => {
   let dicky: Dicky;
   const prefix = "test:dispatch:";
+  const emptySchema = z.object({});
 
   beforeAll(async () => {
     await startRedis();
@@ -38,9 +39,13 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     );
     dicky.use(
       service("test", {
-        echo: async (ctx, { msg }: { msg: string }) => {
-          await ctx.run("log", () => msg);
-          return { echoed: msg };
+        echo: {
+          input: z.object({ msg: z.string() }),
+          output: z.object({ echoed: z.string() }),
+          handler: async (ctx, { msg }: { msg: string }) => {
+            await ctx.run("log", () => msg);
+            return { echoed: msg };
+          },
         },
       }),
     );
@@ -60,7 +65,11 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     );
     dicky.use(
       service("test", {
-        process: async (_ctx, { id }: { id: number }) => ({ id }),
+        process: {
+          input: z.object({ id: z.number() }),
+          output: z.object({ id: z.number() }),
+          handler: async (_ctx, { id }: { id: number }) => ({ id }),
+        },
       }),
     );
 
@@ -83,7 +92,11 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     );
     dicky.use(
       service("test", {
-        delayed: async () => ({ executed: Date.now() }),
+        delayed: {
+          input: emptySchema,
+          output: z.object({ executed: z.number() }),
+          handler: async (_ctx, _args: {}) => ({ executed: Date.now() }),
+        },
       }),
     );
 

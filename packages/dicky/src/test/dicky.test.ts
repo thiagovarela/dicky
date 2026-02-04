@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../dicky";
 import { service } from "../define";
 import { MockRedisClient } from "../stores/redis";
@@ -7,6 +8,7 @@ import type { DickyConfig } from "../types";
 import { TimeoutError } from "../errors";
 
 const prefix = "test:dicky:";
+const emptySchema = z.object({});
 
 function createConfig(redis: MockRedisClient, overrides?: Partial<DickyConfig>): DickyConfig {
   return {
@@ -46,7 +48,11 @@ describe("Dicky", () => {
     const { dicky } = createDicky();
     dicky.use(
       service("users", {
-        getProfile: async (_ctx, { id }: { id: string }) => ({ id }),
+        getProfile: {
+          input: z.object({ id: z.string() }),
+          output: z.object({ id: z.string() }),
+          handler: async (_ctx, { id }: { id: string }) => ({ id }),
+        },
       }),
     );
 
@@ -55,16 +61,40 @@ describe("Dicky", () => {
 
   it("throws on registration after start", async () => {
     const { dicky } = createDicky();
-    dicky.use(service("test", { handler: async () => {} }));
+    dicky.use(
+      service("test", {
+        handler: {
+          input: emptySchema,
+          handler: async (_ctx, _args: {}) => {},
+        },
+      }),
+    );
     await dicky.start();
 
-    expect(() => dicky.use(service("other", { handler: async () => {} }))).toThrow();
+    expect(() =>
+      dicky.use(
+        service("other", {
+          handler: {
+            input: emptySchema,
+            handler: async (_ctx, _args: {}) => {},
+          },
+        }),
+      ),
+    ).toThrow();
     await dicky.stop();
   });
 
   it("sends invocations", async () => {
     const { dicky, redis } = createDicky();
-    dicky.use(service("test", { echo: async (_ctx, { msg }: { msg: string }) => msg }));
+    dicky.use(
+      service("test", {
+        echo: {
+          input: z.object({ msg: z.string() }),
+          output: z.string(),
+          handler: async (_ctx, { msg }: { msg: string }) => msg,
+        },
+      }),
+    );
     await dicky.start();
 
     const id = await dicky.send("test", "echo", { msg: "hello" });
@@ -89,7 +119,11 @@ describe("Dicky", () => {
     const { dicky, redis } = createDicky();
     dicky.use(
       service("test", {
-        echo: async (_ctx, { msg }: { msg: string }) => ({ echoed: msg }),
+        echo: {
+          input: z.object({ msg: z.string() }),
+          output: z.object({ echoed: z.string() }),
+          handler: async (_ctx, { msg }: { msg: string }) => ({ echoed: msg }),
+        },
       }),
     );
     await dicky.start();
@@ -114,7 +148,15 @@ describe("Dicky", () => {
 
   it("times out when completion is missing", async () => {
     const { dicky } = createDicky({ worker: { concurrency: 0 } });
-    dicky.use(service("test", { handler: async () => "ok" }));
+    dicky.use(
+      service("test", {
+        handler: {
+          input: emptySchema,
+          output: z.string(),
+          handler: async (_ctx, _args: {}) => "ok",
+        },
+      }),
+    );
     await dicky.start();
 
     await expect(dicky.invoke("test", "handler", {}, { timeoutMs: 50 })).rejects.toBeInstanceOf(
@@ -126,7 +168,15 @@ describe("Dicky", () => {
 
   it("lists DLQ entries", async () => {
     const { dicky } = createDicky();
-    dicky.use(service("test", { handler: async () => "ok" }));
+    dicky.use(
+      service("test", {
+        handler: {
+          input: emptySchema,
+          output: z.string(),
+          handler: async (_ctx, _args: {}) => "ok",
+        },
+      }),
+    );
     await dicky.start();
 
     const entries = await dicky.listDLQ("test");

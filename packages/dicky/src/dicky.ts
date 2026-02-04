@@ -3,6 +3,7 @@ import type {
   ArgsOf,
   DLQEntry,
   DickyConfig,
+  HandlerDef,
   InvokeOptions,
   Invocation,
   InvocationId,
@@ -10,6 +11,7 @@ import type {
   Metrics,
   ObjectDef,
   Registry,
+  RegisteredHandler,
   RegisteredService,
   ResolvedConfig,
   ReturnOf,
@@ -23,7 +25,7 @@ import { DLQStoreImpl } from "./stores/dlq";
 import type { JournalStore } from "./stores/journal";
 import { JournalStoreImpl } from "./stores/journal";
 import { LockManagerImpl } from "./stores/lock";
-import { createRedisClient } from "./stores/redis";
+import { createRedisClient, IoredisClient } from "./stores/redis";
 import type { RedisClient } from "./stores/redis";
 import { StateStoreImpl } from "./stores/state";
 import type { StreamProducer } from "./stores/stream";
@@ -31,11 +33,13 @@ import { StreamProducerImpl } from "./stores/stream";
 import { TimerStoreImpl } from "./stores/timer";
 import type { Worker } from "./worker";
 import { WorkerImpl } from "./worker";
+import { createLogger } from "./workerLogger";
 import type { Logger } from "./workerLogger";
 import { LuaScriptsImpl } from "./lua";
 import { resolveConfig } from "./config";
-import { keys } from "./utils";
+import { keys, validateIdentifier } from "./utils";
 import { TimeoutError } from "./errors";
+import { parseInvocationRecord } from "./invocation";
 
 export class Dicky<R extends Registry = {}> {
   private services = new Map<string, RegisteredService>();
@@ -49,6 +53,9 @@ export class Dicky<R extends Registry = {}> {
   private journal: JournalStore | null = null;
   private dlq: DLQStore | null = null;
   private logger: Logger;
+  private completionRedis: RedisClient | null = null;
+  private signalHandlers = new Map<NodeJS.Signals, () => void>();
+  private stopping = false;
 
   constructor(config: DickyConfig) {
     this.config = resolveConfig(config);
@@ -63,17 +70,24 @@ export class Dicky<R extends Registry = {}> {
       throw new Error(`Service "${def.name}" already registered`);
     }
 
+    validateIdentifier(def.name, "Service name");
+    for (const handlerName of Object.keys(def.handlers)) {
+      validateIdentifier(handlerName, "Handler name");
+    }
+
+    const normalizedHandlers = normalizeHandlers(def.handlers);
+
     if (def.__kind === "service") {
       this.services.set(def.name, {
         kind: "service",
         name: def.name,
-        handlers: def.handlers,
+        handlers: normalizedHandlers,
       });
     } else {
       this.services.set(def.name, {
         kind: "object",
         name: def.name,
-        handlers: def.handlers,
+        handlers: normalizedHandlers,
         initialState: def.initial,
       });
     }
@@ -85,6 +99,9 @@ export class Dicky<R extends Registry = {}> {
     return this.services.get(name);
   }
 
+  /**
+   * Dispatch a handler without awaiting its result.
+   */
   async send<
     S extends (keyof R & string) | (string & {}),
     H extends S extends keyof R ? (keyof R[S]["handlers"] & string) | (string & {}) : string,
@@ -116,11 +133,14 @@ export class Dicky<R extends Registry = {}> {
     return this.streamProducer!.dispatch(service as string, handler as string, args, {
       ...(opts?.key ? { key: opts.key } : {}),
       ...(opts?.delay ? { delay: opts.delay } : {}),
-      ...(opts?.maxRetries != null ? { maxRetries: opts.maxRetries } : {}),
+      maxRetries: opts?.maxRetries ?? this.config.retry.maxRetries,
       ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
     });
   }
 
+  /**
+   * Invoke a handler and wait for its completion payload.
+   */
   async invoke<
     S extends (keyof R & string) | (string & {}),
     H extends S extends keyof R ? (keyof R[S]["handlers"] & string) | (string & {}) : string,
@@ -153,12 +173,18 @@ export class Dicky<R extends Registry = {}> {
     }
 
     const redis = await this.createRedisClient();
-    const blockingRedis = await this.createRedisClient();
+    const blockingRedis = await this.createBlockingRedisClient(redis);
+    const completionRedis = await this.createCompletionRedisClient(redis);
 
     const luaScripts = new LuaScriptsImpl();
     await luaScripts.load(redis);
 
-    const streamProducer = new StreamProducerImpl(redis, this.config.redis.keyPrefix);
+    const streamProducer = new StreamProducerImpl(
+      redis,
+      this.config.redis.keyPrefix,
+      this.config.retry.maxRetries,
+      this.config.retention.idempotencyTtlMs,
+    );
     const journal = new JournalStoreImpl(redis, this.config.redis.keyPrefix);
     const stateStore = new StateStoreImpl(redis, this.config.redis.keyPrefix);
     const timerStore = new TimerStoreImpl(redis, this.config.redis.keyPrefix, luaScripts);
@@ -183,6 +209,7 @@ export class Dicky<R extends Registry = {}> {
     this.awakeableStore = awakeableStore;
     this.journal = journal;
     this.dlq = dlq;
+    this.completionRedis = completionRedis;
 
     if (this.config.worker.concurrency > 0) {
       this.worker = new WorkerImpl(
@@ -204,17 +231,28 @@ export class Dicky<R extends Registry = {}> {
     }
 
     this.started = true;
+    this.registerSignalHandlers();
   }
 
   async stop(): Promise<void> {
-    if (!this.started) {
+    if (!this.started || this.stopping) {
       return;
     }
+
+    this.stopping = true;
+    this.unregisterSignalHandlers();
 
     await this.worker?.stop();
 
     if (this.blockingRedis && this.blockingRedis !== this.redis) {
       await this.blockingRedis.quit();
+    }
+    if (
+      this.completionRedis &&
+      this.completionRedis !== this.redis &&
+      this.completionRedis !== this.blockingRedis
+    ) {
+      await this.completionRedis.quit();
     }
     if (this.redis) {
       await this.redis.quit();
@@ -228,6 +266,8 @@ export class Dicky<R extends Registry = {}> {
     this.awakeableStore = null;
     this.journal = null;
     this.dlq = null;
+    this.completionRedis = null;
+    this.stopping = false;
   }
 
   async resolveAwakeable(awakeableId: string, value?: unknown): Promise<void> {
@@ -246,7 +286,10 @@ export class Dicky<R extends Registry = {}> {
     if (!record.id) {
       return null;
     }
-    return parseInvocation(record);
+    return parseInvocationRecord(record, {
+      service: record.service ?? "",
+      args: record.args ?? "null",
+    });
   }
 
   async getJournal(id: InvocationId): Promise<JournalEntry[]> {
@@ -257,22 +300,67 @@ export class Dicky<R extends Registry = {}> {
   async cancel(id: InvocationId): Promise<void> {
     this.ensureStarted();
     const key = keys(this.config.redis.keyPrefix).invocation(id);
-    await this.redis!.hset(key, "status", "cancelled");
-    await this.redis!.hset(key, "updatedAt", String(Date.now()));
+    const record = await this.redis!.hgetall(key);
+    if (!record.id) {
+      return;
+    }
+
+    await this.redis!.hmset(
+      key,
+      "status",
+      "cancelled",
+      "updatedAt",
+      String(Date.now()),
+    );
+    await this.redis!.pexpire(key, this.config.retention.invocationTtlMs);
+    await this.redis!.pexpire(
+      keys(this.config.redis.keyPrefix).journal(id),
+      this.config.retention.journalTtlMs,
+    );
+
+    await this.adjustMetricsForCancel(record.service ?? "all", record.status);
   }
 
   async getMetrics(service = "all"): Promise<Metrics> {
     this.ensureStarted();
+    const key = keys(this.config.redis.keyPrefix).metrics(service);
+    const data = await this.redis!.hgetall(key);
+
+    const completed = Number.parseInt(data.completed ?? "0", 10);
+    const failed = Number.parseInt(data.failed ?? "0", 10);
+    const replayed = Number.parseInt(data.replayed ?? "0", 10);
+    const totalSteps = Number.parseInt(data.totalSteps ?? "0", 10);
+    const totalDurationMs = Number.parseInt(data.totalDurationMs ?? "0", 10);
+    const pending = Number.parseInt(data.pending ?? "0", 10);
+    const active = Number.parseInt(data.active ?? "0", 10);
+    const processingErrors = Number.parseInt(data.processingErrors ?? "0", 10);
+    const totalCompleted = completed + failed;
+
     return {
       service,
-      completed: 0,
-      failed: 0,
-      replayed: 0,
-      totalSteps: 0,
-      avgDurationMs: 0,
-      pending: 0,
-      active: 0,
+      completed,
+      failed,
+      replayed,
+      totalSteps,
+      avgDurationMs: totalCompleted > 0 ? Math.round(totalDurationMs / totalCompleted) : 0,
+      pending,
+      active,
+      processingErrors,
     };
+  }
+
+  /**
+   * Perform a Redis health check and report latency.
+   */
+  async health(): Promise<{ status: "healthy" | "unhealthy"; latency: number }> {
+    this.ensureStarted();
+    const start = Date.now();
+    try {
+      await this.redis!.ping();
+      return { status: "healthy", latency: Date.now() - start };
+    } catch {
+      return { status: "unhealthy", latency: Date.now() - start };
+    }
   }
 
   async listDLQ(service: string, opts?: { limit?: number }): Promise<DLQEntry[]> {
@@ -301,10 +389,98 @@ export class Dicky<R extends Registry = {}> {
     return createRedisClient(options);
   }
 
+  private async createBlockingRedisClient(primary: RedisClient): Promise<RedisClient> {
+    const redisConfig = this.config.redis;
+
+    if (redisConfig.blockingClient) {
+      return redisConfig.blockingClient;
+    }
+
+    if (redisConfig.blockingFactory) {
+      return redisConfig.blockingFactory(redisConfig.url);
+    }
+
+    if (primary instanceof IoredisClient) {
+      const duplicate = primary.raw.duplicate();
+      await duplicate.ping();
+      return new IoredisClient(duplicate);
+    }
+
+    return primary;
+  }
+
+  private async createCompletionRedisClient(primary: RedisClient): Promise<RedisClient> {
+    if (primary instanceof IoredisClient) {
+      const duplicate = primary.raw.duplicate();
+      await duplicate.ping();
+      return new IoredisClient(duplicate);
+    }
+
+    return primary;
+  }
+
   private ensureStarted(): void {
-    if (!this.started || !this.streamProducer || !this.redis) {
+    if (
+      !this.started ||
+      !this.streamProducer ||
+      !this.redis ||
+      !this.blockingRedis ||
+      !this.completionRedis
+    ) {
       throw new Error("Dicky must be started before dispatching");
     }
+  }
+
+  private async adjustMetricsForCancel(
+    serviceName: string,
+    status?: string,
+  ): Promise<void> {
+    if (!this.redis) {
+      return;
+    }
+
+    const deltas: Array<[string, number]> = [];
+    if (status === "pending" || status === "suspended") {
+      deltas.push(["pending", -1]);
+    }
+    if (status === "running") {
+      deltas.push(["active", -1]);
+    }
+
+    if (deltas.length === 0) {
+      return;
+    }
+
+    for (const service of [serviceName, "all"]) {
+      const key = keys(this.config.redis.keyPrefix).metrics(service);
+      for (const [field, value] of deltas) {
+        await this.redis.hincrby(key, field, value);
+      }
+    }
+  }
+
+  private registerSignalHandlers(): void {
+    if (!this.config.shutdown.handleSignals) {
+      return;
+    }
+
+    for (const signal of this.config.shutdown.signals) {
+      if (this.signalHandlers.has(signal)) {
+        continue;
+      }
+      const handler = () => {
+        void this.stop();
+      };
+      this.signalHandlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+  }
+
+  private unregisterSignalHandlers(): void {
+    for (const [signal, handler] of this.signalHandlers) {
+      process.off(signal, handler);
+    }
+    this.signalHandlers.clear();
   }
 
   private async waitForCompletion(
@@ -314,65 +490,57 @@ export class Dicky<R extends Registry = {}> {
   ): Promise<unknown> {
     const timeoutMs = opts?.timeoutMs ?? 30_000;
     const completionKey = keys(this.config.redis.keyPrefix).completion(invocationId);
+    const queueKey = keys(this.config.redis.keyPrefix).completionQueue(invocationId);
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
       const raw = await this.redis!.get(completionKey);
       if (raw) {
-        const payload = JSON.parse(raw) as {
-          status: "completed" | "failed";
-          result?: string;
-          error?: string;
-        };
-        if (payload.status === "completed") {
-          return payload.result != null ? JSON.parse(payload.result) : undefined;
-        }
-        throw new Error(payload.error ?? "Invocation failed");
+        return parseCompletionPayload(raw);
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      const timeoutSeconds = Math.ceil(remainingMs / 1000);
+      const popped = await this.completionRedis!.blpop(queueKey, timeoutSeconds);
+      if (!popped) {
+        continue;
+      }
+      const [, payload] = popped;
+      return parseCompletionPayload(payload);
     }
 
     throw new TimeoutError(invocationId, handlerName, timeoutMs);
   }
 }
 
-function parseInvocation(record: Record<string, string>): Invocation {
-  const parsedResult = parseJson(record.result);
-  return {
-    id: record.id ?? "",
-    service: record.service ?? "",
-    handler: record.handler ?? "",
-    args: record.args ? JSON.parse(record.args) : null,
-    status: (record.status as Invocation["status"]) ?? "pending",
-    attempt: Number.parseInt(record.attempt ?? "0", 10),
-    maxRetries: Number.parseInt(record.maxRetries ?? "0", 10),
-    createdAt: Number.parseInt(record.createdAt ?? "0", 10),
-    updatedAt: Number.parseInt(record.updatedAt ?? "0", 10),
-    ...(record.key ? { key: record.key } : {}),
-    ...(record.completedAt ? { completedAt: Number.parseInt(record.completedAt, 10) } : {}),
-    ...(parsedResult !== undefined ? { result: parsedResult } : {}),
-    ...(record.error ? { error: record.error } : {}),
-    ...(record.parentId ? { parentId: record.parentId } : {}),
-    ...(record.parentStep ? { parentStep: Number.parseInt(record.parentStep, 10) } : {}),
+function parseCompletionPayload(raw: string): unknown {
+  const payload = JSON.parse(raw) as {
+    status: "completed" | "failed";
+    result?: string;
+    error?: string;
   };
+  if (payload.status === "completed") {
+    return payload.result != null ? JSON.parse(payload.result) : undefined;
+  }
+  throw new Error(payload.error ?? "Invocation failed");
 }
 
-function parseJson(value?: string): unknown {
-  if (value == null) {
-    return undefined;
+function normalizeHandlers(handlers: Record<string, HandlerDef>): Record<string, RegisteredHandler> {
+  const normalized: Record<string, RegisteredHandler> = {};
+  for (const [name, def] of Object.entries(handlers)) {
+    if (typeof def === "function") {
+      normalized[name] = { handler: def };
+      continue;
+    }
+    normalized[name] = {
+      handler: def.handler,
+      ...(def.input ? { input: def.input } : {}),
+      ...(def.output ? { output: def.output } : {}),
+    };
   }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
+  return normalized;
 }
 
-function createLogger(): Logger {
-  return {
-    error: (data, message) => console.error(message ?? "", data),
-    warn: (data, message) => console.warn(message ?? "", data),
-    info: (data, message) => console.info(message ?? "", data),
-    debug: (data, message) => console.debug(message ?? "", data),
-  };
-}

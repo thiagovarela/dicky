@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { service } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
   delay,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
 } from "./setup";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
 (integrationEnabled ? describe : describe.skip)("Integration: Cross-Service Calls", () => {
   const prefix = "test:cross:";
@@ -32,21 +32,29 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("orders", {
-        create: async (ctx, { orderId }: { orderId: string }) => {
-          await ctx.send("notifications", "send", {
-            userId: "user-1",
-            message: `Order ${orderId} created`,
-          });
-          return { orderId };
+        create: {
+          input: z.object({ orderId: z.string() }),
+          output: z.object({ orderId: z.string() }),
+          handler: async (ctx, { orderId }: { orderId: string }) => {
+            await ctx.send("notifications", "send", {
+              userId: "user-1",
+              message: `Order ${orderId} created`,
+            });
+            return { orderId };
+          },
         },
       }),
     );
 
     dicky.use(
       service("notifications", {
-        send: async (_ctx, { message }: { userId: string; message: string }) => {
-          notifications.push(message);
-          return { sent: true };
+        send: {
+          input: z.object({ userId: z.string(), message: z.string() }),
+          output: z.object({ sent: z.boolean() }),
+          handler: async (_ctx, { message }: { userId: string; message: string }) => {
+            notifications.push(message);
+            return { sent: true };
+          },
         },
       }),
     );
@@ -68,18 +76,29 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("orders", {
-        create: async (ctx, { orderId }: { orderId: string }) => {
-          const inventory = await ctx.invoke("inventory", "reserve", { orderId });
-          return { orderId, inventory };
+        create: {
+          input: z.object({ orderId: z.string() }),
+          output: z.object({
+            orderId: z.string(),
+            inventory: z.object({ orderId: z.string(), reserved: z.boolean() }),
+          }),
+          handler: async (ctx, { orderId }: { orderId: string }) => {
+            const inventory = await ctx.invoke("inventory", "reserve", { orderId });
+            return { orderId, inventory };
+          },
         },
       }),
     );
 
     dicky.use(
       service("inventory", {
-        reserve: async (ctx, { orderId }: { orderId: string }) => {
-          await ctx.sleep("processing", "100ms");
-          return { orderId, reserved: true };
+        reserve: {
+          input: z.object({ orderId: z.string() }),
+          output: z.object({ orderId: z.string(), reserved: z.boolean() }),
+          handler: async (ctx, { orderId }: { orderId: string }) => {
+            await ctx.sleep("processing", "100ms");
+            return { orderId, reserved: true };
+          },
         },
       }),
     );

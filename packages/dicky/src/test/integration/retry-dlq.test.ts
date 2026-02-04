@@ -1,19 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { service } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
   waitForInvocation,
 } from "./setup";
 
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
-
 (integrationEnabled ? describe : describe.skip)("Integration: Retry and DLQ", () => {
   const prefix = "test:retry:";
+  const emptySchema = z.object({});
 
   beforeAll(async () => {
     await startRedis();
@@ -34,12 +35,16 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("unreliable", {
-        flaky: async () => {
-          attempts += 1;
-          if (attempts < 3) {
-            throw new Error("Temporary failure");
-          }
-          return "success";
+        flaky: {
+          input: emptySchema,
+          output: z.string(),
+          handler: async (_ctx, _args: {}) => {
+            attempts += 1;
+            if (attempts < 3) {
+              throw new Error("Temporary failure");
+            }
+            return "success";
+          },
         },
       }),
     );
@@ -64,8 +69,12 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("failing", {
-        alwaysFail: async () => {
-          throw new Error("Permanent failure");
+        alwaysFail: {
+          input: emptySchema,
+          output: z.never(),
+          handler: async (_ctx, _args: {}) => {
+            throw new Error("Permanent failure");
+          },
         },
       }),
     );
@@ -87,18 +96,22 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     const dicky = new Dicky(
       buildIntegrationConfig({
         redis: { ...testConfig.redis, keyPrefix: prefix },
-        retry: { maxRetries: 1, initialDelayMs: 50, maxDelayMs: 200, backoffMultiplier: 2 },
+        retry: { maxRetries: 0, initialDelayMs: 50, maxDelayMs: 200, backoffMultiplier: 2 },
       }),
     );
 
     dicky.use(
       service("dlq-test", {
-        succeedOnRetry: async () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new Error("First attempt fails");
-          }
-          return "success";
+        succeedOnRetry: {
+          input: emptySchema,
+          output: z.string(),
+          handler: async (_ctx, _args: {}) => {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new Error("First attempt fails");
+            }
+            return "success";
+          },
         },
       }),
     );

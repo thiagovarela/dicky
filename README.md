@@ -38,25 +38,40 @@ Your Node.js App
 ## Quick Example
 
 ```typescript
-import { dicky } from 'dicky'
+import { Dicky, service } from "@dicky/dicky";
+import { z } from "zod";
 
-const userService = dicky.service('users')
-  .method('sendWelcomeEmail', async (ctx, { userId }) => {
-    await ctx.sideEffect(async () => {
-      await emailProvider.send(userId, 'Welcome!')
-    })
-    return { success: true }
-  })
-  .method('processOrder', async (ctx, { orderId }) => {
-    await ctx.sleep(60_000) // Durable timer
-    await ctx.call('inventory.reserve', { orderId })
-    return { processed: true }
-  })
+const dicky = new Dicky({
+  redis: { host: "localhost", port: 6379 },
+});
 
-dicky.use(userService)
+const userService = service("users", {
+  sendWelcomeEmail: {
+    input: z.object({ userId: z.string() }),
+    output: z.object({ success: z.boolean() }),
+    handler: async (ctx, { userId }) => {
+      await ctx.run("send-email", async () => {
+        await emailProvider.send(userId, "Welcome!");
+      });
+      return { success: true };
+    },
+  },
+  processOrder: {
+    input: z.object({ orderId: z.string() }),
+    output: z.object({ processed: z.boolean() }),
+    handler: async (ctx, { orderId }) => {
+      await ctx.sleep("wait", "60s"); // Durable timer
+      await ctx.invoke("inventory", "reserve", { orderId });
+      return { processed: true };
+    },
+  },
+});
 
-dicky.listen(3000)
+dicky.use(userService);
+await dicky.start();
 ```
+
+Handlers can optionally provide Zod input/output schemas. Dicky validates invocation arguments and handler results before persisting completion, and uses the schemas to infer handler types.
 
 ## Durable Execution Guarantees
 
@@ -112,24 +127,35 @@ Define services in separate files with full type inference:
 
 ```typescript
 // services/users.ts
-export const userService = dicky.service('users')
-  .method('getProfile', async (ctx, { id }) => {
-    return db.user.find(id)
-  })
-  .method('updateProfile', async (ctx, args) => {
-    return db.user.update(args.id, args.data)
-  })
+import { service } from "@dicky/dicky";
+import { z } from "zod";
+
+export const userService = service("users", {
+  getProfile: {
+    input: z.object({ id: z.string() }),
+    output: z.object({ id: z.string() }),
+    handler: async (_ctx, { id }) => db.user.find(id),
+  },
+  updateProfile: {
+    input: z.object({ id: z.string(), data: z.any() }),
+    output: z.object({ id: z.string() }).passthrough(),
+    handler: async (_ctx, args) => db.user.update(args.id, args.data),
+  },
+});
 
 // index.ts
-import { userService } from './services/users'
-import { orderService } from './services/orders'
+import { Dicky } from "@dicky/dicky";
+import { userService } from "./services/users";
+import { orderService } from "./services/orders";
 
-dicky.use(userService)
-dicky.use(orderService)
+const dicky = new Dicky({ redis: { host: "localhost", port: 6379 } })
+  .use(userService)
+  .use(orderService);
 
-// Full autocomplete available here:
-dicky.services.       // → users, orders
-dicky.services.users. // → getProfile, updateProfile
+await dicky.start();
+
+// Typed invocations:
+await dicky.invoke("users", "getProfile", { id: "user-1" });
 ```
 
 ## Installation

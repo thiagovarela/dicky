@@ -1,20 +1,21 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { service } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
   delay,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
   waitForInvocation,
 } from "./setup";
 
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
-
 (integrationEnabled ? describe : describe.skip)("Integration: Journal Replay", () => {
   const prefix = "test:replay:";
+  const emptySchema = z.object({});
 
   beforeAll(async () => {
     await startRedis();
@@ -27,10 +28,13 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
   it("replays journaled operations after restart", async () => {
     let runCount = 0;
 
-    const handler = async (ctx: {
-      run: (name: string, fn: () => void) => Promise<void>;
-      sleep: (n: string, d: string) => Promise<void>;
-    }) => {
+    const handler = async (
+      ctx: {
+        run: (name: string, fn: () => void) => Promise<void>;
+        sleep: (n: string, d: string) => Promise<void>;
+      },
+      _args: {},
+    ) => {
       await ctx.run("step-1", () => {
         runCount += 1;
       });
@@ -47,7 +51,15 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     const dicky = new Dicky(
       buildIntegrationConfig({ redis: { ...testConfig.redis, keyPrefix: prefix } }),
     );
-    dicky.use(service("counter", { increment: handler }));
+    dicky.use(
+      service("counter", {
+        increment: {
+          input: emptySchema,
+          output: z.number(),
+          handler,
+        },
+      }),
+    );
 
     await dicky.start();
     const id = await dicky.send("counter", "increment", {});
@@ -62,7 +74,15 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
     const dicky2 = new Dicky(
       buildIntegrationConfig({ redis: { ...testConfig.redis, keyPrefix: prefix } }),
     );
-    dicky2.use(service("counter", { increment: handler }));
+    dicky2.use(
+      service("counter", {
+        increment: {
+          input: emptySchema,
+          output: z.number(),
+          handler,
+        },
+      }),
+    );
 
     await dicky2.start();
     await waitForInvocation(dicky2, id, "completed", 10_000);

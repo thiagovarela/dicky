@@ -5,6 +5,7 @@ import type {
   DickyConfig,
   DurableContext,
   Handler,
+  HandlerWithSchema,
   ObjectDef,
   ReturnOf,
   ServiceDef,
@@ -17,11 +18,13 @@ type Expect<T extends true> = T;
 
 type ExampleHandler = (ctx: DurableContext, args: { userId: string }) => Promise<number>;
 
-type _ArgsExtract = Expect<Equal<ArgsOf<ExampleHandler>, { userId: string }>>;
+type ExampleHandlerWithSchema = HandlerWithSchema<{ userId: string }, number>;
 
-type _ReturnExtract = Expect<Equal<ReturnOf<ExampleHandler>, number>>;
+type _ArgsExtract = Expect<Equal<ArgsOf<ExampleHandlerWithSchema>, { userId: string }>>;
 
-type ExampleService = ServiceDef<"onboarding", { welcome: ExampleHandler }>;
+type _ReturnExtract = Expect<Equal<ReturnOf<ExampleHandlerWithSchema>, number>>;
+
+type ExampleService = ServiceDef<"onboarding", { welcome: ExampleHandlerWithSchema }>;
 
 type ExampleObject = ObjectDef<"counter", { count: number }, { increment: ExampleHandler }>;
 

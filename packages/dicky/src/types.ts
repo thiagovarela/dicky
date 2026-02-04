@@ -1,11 +1,12 @@
 import type { RedisClient, RedisDriver } from "./stores/redis";
+import type { ZodType, ZodTypeAny } from "zod";
 
 export type InvocationId = string;
 
 // Service/Object definitions
 export interface ServiceDef<
   TName extends string = string,
-  THandlers extends Record<string, Handler> = Record<string, Handler>,
+  THandlers extends Record<string, HandlerDef> = Record<string, HandlerDef>,
 > {
   readonly __kind: "service";
   readonly name: TName;
@@ -15,7 +16,7 @@ export interface ServiceDef<
 export interface ObjectDef<
   TName extends string = string,
   TState = unknown,
-  THandlers extends Record<string, Handler> = Record<string, Handler>,
+  THandlers extends Record<string, HandlerDef> = Record<string, HandlerDef>,
 > {
   readonly __kind: "object";
   readonly name: TName;
@@ -85,16 +86,24 @@ export interface DurableContext<TState = unknown> {
   readonly key: string | undefined;
   readonly state: TState;
 
-  // Execute side effect with exactly-once semantics
+  /**
+   * Execute a side effect with exactly-once semantics via the journal.
+   */
   run<T>(name: string, fn: () => T | Promise<T>): Promise<T>;
 
-  // Sleep durably
+  /**
+   * Sleep durably for a given duration string (e.g. "5s", "500ms").
+   */
   sleep(name: string, duration: string): Promise<void>;
 
-  // Invoke another handler and await result
+  /**
+   * Invoke another handler and await its result.
+   */
   invoke<T>(service: string, handler: string, args?: unknown, opts?: { key?: string }): Promise<T>;
 
-  // Fire-and-forget dispatch
+  /**
+   * Fire-and-forget dispatch to another handler.
+   */
   send(
     service: string,
     handler: string,
@@ -102,16 +111,24 @@ export interface DurableContext<TState = unknown> {
     opts?: { key?: string; delay?: string },
   ): Promise<void>;
 
-  // Create awakeable for external resolution
+  /**
+   * Create an awakeable that can be resolved externally.
+   */
   awakeable<T>(name: string): Promise<[string, Promise<T>]>;
 
-  // Resolve awakeable from handler
+  /**
+   * Resolve a previously created awakeable.
+   */
   resolveAwakeable(awakeableId: string, value?: unknown): Promise<void>;
 
-  // Reject awakeable
+  /**
+   * Reject a previously created awakeable with an error message.
+   */
   rejectAwakeable(awakeableId: string, error: string): Promise<void>;
 
-  // State management for virtual objects
+  /**
+   * Persist state for virtual objects.
+   */
   setState(newState: TState): Promise<void>;
 }
 
@@ -138,7 +155,9 @@ export interface RedisConfig {
   url?: string;
   driver?: RedisDriver;
   client?: RedisClient;
+  blockingClient?: RedisClient;
   factory?: (url: string) => Promise<RedisClient>;
+  blockingFactory?: (url: string) => Promise<RedisClient>;
 }
 
 export interface WorkerConfig {
@@ -157,6 +176,18 @@ export interface RetryConfig {
   backoffMultiplier?: number;
 }
 
+export interface RetentionConfig {
+  completionTtlMs?: number;
+  invocationTtlMs?: number;
+  journalTtlMs?: number;
+  idempotencyTtlMs?: number;
+}
+
+export interface ShutdownConfig {
+  handleSignals?: boolean;
+  signals?: Array<NodeJS.Signals>;
+}
+
 export interface LogConfig {
   level?: "debug" | "info" | "warn" | "error";
 }
@@ -165,6 +196,8 @@ export interface DickyConfig {
   redis: RedisConfig;
   worker?: WorkerConfig;
   retry?: RetryConfig;
+  retention?: RetentionConfig;
+  shutdown?: ShutdownConfig;
   log?: LogConfig;
 }
 
@@ -172,13 +205,21 @@ export interface ResolvedConfig {
   redis: RedisConfig & { keyPrefix: string; url: string };
   worker: Required<WorkerConfig>;
   retry: Required<RetryConfig>;
+  retention: Required<RetentionConfig>;
+  shutdown: Required<ShutdownConfig>;
   log?: LogConfig;
+}
+
+export interface RegisteredHandler {
+  handler: Handler;
+  input?: ZodTypeAny;
+  output?: ZodTypeAny;
 }
 
 export interface RegisteredService {
   kind: "service" | "object";
   name: string;
-  handlers: Record<string, Handler>;
+  handlers: Record<string, RegisteredHandler>;
   initialState?: unknown;
 }
 
@@ -191,6 +232,7 @@ export interface Metrics {
   avgDurationMs: number;
   pending: number;
   active: number;
+  processingErrors: number;
 }
 
 export interface DLQEntry {
@@ -205,6 +247,23 @@ export interface DLQEntry {
 }
 
 // Type inference utilities
-export type Handler = (ctx: DurableContext, args: any) => Promise<any>;
-export type ArgsOf<H> = H extends (ctx: any, args: infer A) => any ? A : never;
-export type ReturnOf<H> = H extends (...args: any[]) => Promise<infer R> ? R : never;
+export type Handler<TArgs = unknown, TResult = unknown> = {
+  bivarianceHack(ctx: DurableContext, args: TArgs): Promise<TResult>;
+}["bivarianceHack"];
+
+export interface HandlerWithSchema<TArgs = unknown, TResult = unknown> {
+  input: ZodType<TArgs>;
+  output?: ZodType<TResult>;
+  handler: Handler<TArgs, TResult>;
+}
+
+export type HandlerDef<TArgs = unknown, TResult = unknown> =
+  | Handler<TArgs, TResult>
+  | HandlerWithSchema<TArgs, TResult>;
+
+type HandlerFnOf<H> = H extends { handler: infer F } ? F : H;
+
+export type ArgsOf<H> = HandlerFnOf<H> extends (ctx: any, args: infer A) => any ? A : never;
+export type ReturnOf<H> = HandlerFnOf<H> extends (...args: any[]) => Promise<infer R>
+  ? R
+  : never;

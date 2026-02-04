@@ -7,16 +7,21 @@
  */
 import { strict as assert } from "node:assert";
 import { Dicky, service } from "@dicky/dicky";
+import { z } from "zod";
 import { createConfig, withCleanup } from "./setup";
 
 const config = createConfig("ex-01");
-const dicky = new Dicky(config);
 
-dicky.use(
+const greetSchema = z.object({ name: z.string() });
+
+type GreetArgs = z.infer<typeof greetSchema>;
+
+const dicky = new Dicky(config).use(
   service("hello", {
-    greet: async (_ctx, args: unknown) => {
-      const { name } = args as { name: string };
-      return `Hello, ${name}!`;
+    greet: {
+      input: greetSchema,
+      output: z.string(),
+      handler: async (_ctx, { name }: GreetArgs) => `Hello, ${name}!`,
     },
   }),
 );
@@ -24,7 +29,7 @@ dicky.use(
 export { dicky, config };
 
 export async function run() {
-  const result = (await dicky.invoke("hello", "greet", { name: "Dicky" })) as string;
+  const result = await dicky.invoke("hello", "greet", { name: "Dicky" });
   assert.equal(result, "Hello, Dicky!");
 }
 

@@ -7,25 +7,32 @@
  */
 import { strict as assert } from "node:assert";
 import { Dicky, object } from "@dicky/dicky";
+import { z } from "zod";
 import { createConfig, withCleanup } from "./setup";
 
 const config = createConfig("ex-04");
-const dicky = new Dicky(config);
 
 type CartState = { items: string[] };
 
-dicky.use(
+const addItemSchema = z.object({ item: z.string() });
+
+type AddItemArgs = z.infer<typeof addItemSchema>;
+
+const dicky = new Dicky(config).use(
   object("cart", {
     initial: { items: [] as string[] },
     handlers: {
-      addItem: async (ctx, args: unknown) => {
-        const { item } = args as { item: string };
-        const current = ctx.state as CartState;
-        const next = { items: [...current.items, item] };
-        await ctx.setState(next);
-        return next;
+      addItem: {
+        input: addItemSchema,
+        output: z.object({ items: z.array(z.string()) }),
+        handler: async (ctx, { item }: AddItemArgs) => {
+          const current = ctx.state as CartState;
+          const next = { items: [...current.items, item] };
+          await ctx.setState(next);
+          return next;
+        },
       },
-      getItems: async (ctx, _args: unknown) => ctx.state as CartState,
+      getItems: async (ctx, _args: {}) => ctx.state as CartState,
     },
   }),
 );
@@ -38,7 +45,7 @@ export async function run() {
   await dicky.invoke("cart", "addItem", { item: "apple" }, { key });
   await dicky.invoke("cart", "addItem", { item: "banana" }, { key });
 
-  const result = (await dicky.invoke("cart", "getItems", {}, { key })) as CartState;
+  const result = await dicky.invoke("cart", "getItems", {}, { key });
   assert.deepEqual(result.items, ["apple", "banana"]);
 }
 

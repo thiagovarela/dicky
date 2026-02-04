@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { object, service } from "../define";
 import type { ArgsOf } from "../types";
 
@@ -10,7 +11,11 @@ type Expect<T extends true> = T;
 describe("service", () => {
   it("creates service definitions", () => {
     const def = service("users", {
-      getProfile: async (_ctx, { id }: { id: string }) => ({ id }),
+      getProfile: {
+        input: z.object({ id: z.string() }),
+        output: z.object({ id: z.string() }),
+        handler: async (_ctx, { id }: { id: string }) => ({ id }),
+      },
     });
 
     expect(def.__kind).toBe("service");
@@ -29,9 +34,12 @@ describe("object", () => {
     const counter = object("counter", {
       initial: { count: 0 },
       handlers: {
-        increment: async (ctx) => {
-          const current = (ctx.state as { count: number }).count;
-          await ctx.setState({ count: current + 1 });
+        increment: {
+          input: z.object({}),
+          handler: async (ctx, _args: {}) => {
+            const current = (ctx.state as { count: number }).count;
+            await ctx.setState({ count: current + 1 });
+          },
         },
       },
     });

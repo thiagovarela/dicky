@@ -1,7 +1,8 @@
 import type { Logger } from "./workerLogger";
 import { SuspendedError } from "./errors";
 import type { Invocation, InvocationId, RegisteredService, ResolvedConfig } from "./types";
-import { keys, newWorkerId } from "./utils";
+import { parseInvocationRecord } from "./invocation";
+import { flattenFields, keys, newWorkerId } from "./utils";
 import { DurableContextImpl } from "./context";
 import type { AwakeableStore } from "./stores/awakeable";
 import type { DLQStore } from "./stores/dlq";
@@ -9,6 +10,7 @@ import type { JournalStore } from "./stores/journal";
 import type { LockGuard, LockManager } from "./stores/lock";
 import type { RedisClient } from "./stores/redis";
 import type { StateStore } from "./stores/state";
+import { parseStreamMessage } from "./stores/stream";
 import type { StreamMessage, StreamProducer } from "./stores/stream";
 import type { TimerStore } from "./stores/timer";
 
@@ -17,9 +19,20 @@ export interface Worker {
   stop(): Promise<void>;
 }
 
+type MetricField =
+  | "completed"
+  | "failed"
+  | "replayed"
+  | "totalSteps"
+  | "totalDurationMs"
+  | "pending"
+  | "active"
+  | "processingErrors";
+
 export class WorkerImpl implements Worker {
   private workerId: string;
   private running = false;
+  private stopping = false;
   private activeInvocations = new Set<string>();
   private abortController = new AbortController();
   private loopTasks: Array<Promise<void>> = [];
@@ -42,6 +55,7 @@ export class WorkerImpl implements Worker {
   }
 
   async start(): Promise<void> {
+    this.stopping = false;
     this.running = true;
 
     for (const [name] of this.services) {
@@ -52,6 +66,7 @@ export class WorkerImpl implements Worker {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     this.running = false;
     this.abortController.abort();
 
@@ -62,6 +77,7 @@ export class WorkerImpl implements Worker {
 
     await Promise.allSettled(this.loopTasks);
     this.loopTasks = [];
+    this.stopping = false;
   }
 
   private async consumerLoop(): Promise<void> {
@@ -69,6 +85,9 @@ export class WorkerImpl implements Worker {
     let activeCount = 0;
 
     while (this.running && !this.abortController.signal.aborted) {
+      if (this.stopping) {
+        break;
+      }
       if (this.services.size === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.config.worker.pollIntervalMs));
         continue;
@@ -102,14 +121,24 @@ export class WorkerImpl implements Worker {
             continue;
           }
 
+          if (!this.running || this.stopping) {
+            break;
+          }
+
           const [, messages] = results[0] ?? [];
           for (const [messageId, fields] of messages ?? []) {
+            if (this.stopping) {
+              break;
+            }
             const msg = parseStreamMessage(messageId, fields);
             activeCount += 1;
             this.activeInvocations.add(msg.invocationId);
 
             this.processMessage(serviceName, msg)
-              .catch((err) => this.logger.error({ err, msg }, "Failed to process message"))
+              .catch(async (err) => {
+                this.logger.error({ err, msg }, "Failed to process message");
+                await this.incrementMetrics(serviceName, { processingErrors: 1 });
+              })
               .finally(() => {
                 activeCount -= 1;
                 this.activeInvocations.delete(msg.invocationId);
@@ -118,6 +147,10 @@ export class WorkerImpl implements Worker {
         } catch (err) {
           if (!this.running) {
             break;
+          }
+          if (isNoGroupError(err)) {
+            await this.ensureConsumerGroup(serviceName);
+            continue;
           }
           this.logger.error({ err }, "Consumer loop error");
           await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -170,8 +203,8 @@ export class WorkerImpl implements Worker {
     const interval = Math.max(1, Math.floor(this.config.worker.ackTimeoutMs / 2));
 
     while (this.running && !this.abortController.signal.aborted) {
-      try {
-        for (const [serviceName] of this.services) {
+      for (const [serviceName] of this.services) {
+        try {
           const streamKey = keys(this.config.redis.keyPrefix).stream(serviceName);
           const groupName = keys(this.config.redis.keyPrefix).consumerGroup(serviceName);
           const consumerName = keys(this.config.redis.keyPrefix).consumerName(this.workerId);
@@ -189,14 +222,19 @@ export class WorkerImpl implements Worker {
 
           for (const [messageId, fields] of reclaimed ?? []) {
             const msg = parseStreamMessage(messageId, fields);
+            await this.incrementMetrics(serviceName, { replayed: 1 });
             await this.processMessage(serviceName, msg);
           }
+        } catch (err) {
+          if (!this.running) {
+            break;
+          }
+          if (isNoGroupError(err)) {
+            await this.ensureConsumerGroup(serviceName);
+            continue;
+          }
+          this.logger.error({ err }, "Reclaim loop error");
         }
-      } catch (err) {
-        if (!this.running) {
-          break;
-        }
-        this.logger.error({ err }, "Reclaim loop error");
       }
 
       await new Promise((resolve) => setTimeout(resolve, interval));
@@ -221,7 +259,7 @@ export class WorkerImpl implements Worker {
     }
 
     try {
-      await this.updateInvocationStatus(invocation.id, "running");
+      await this.setInvocationStatus(invocation, "running");
 
       let initialState: unknown = undefined;
       if (service.kind === "object" && invocation.key) {
@@ -240,23 +278,23 @@ export class WorkerImpl implements Worker {
         this.stateStore,
         this.awakeableStore,
         this.streamProducer,
-        service.kind === "object" ? { initialState: service.initialState } : undefined,
         initialState as never,
       );
 
-      const handler = service.handlers[msg.handler];
-      if (!handler) {
+      const handlerDef = service.handlers[msg.handler];
+      if (!handlerDef) {
         this.logger.warn?.({ serviceName, handler: msg.handler }, "Unknown handler");
         await this.ack(serviceName, msg.messageId);
         return;
       }
 
       const args = safeJsonParse(msg.args, null);
-      const handlerFn = handler as NonNullable<typeof handler>;
-      const result = await handlerFn(ctx, args);
+      const parsedArgs = handlerDef.input ? handlerDef.input.parse(args) : args;
+      const result = await handlerDef.handler(ctx, parsedArgs);
+      const validatedResult = handlerDef.output ? handlerDef.output.parse(result) : result;
 
-      const serializedResult = result !== undefined ? JSON.stringify(result) : undefined;
-      await this.completeInvocation(invocation.id, serializedResult);
+      const serializedResult = validatedResult !== undefined ? JSON.stringify(validatedResult) : undefined;
+      await this.completeInvocation(invocation, serializedResult);
       await this.ack(serviceName, msg.messageId);
       await this.publishCompletion(invocation.id, "completed", serializedResult);
 
@@ -266,7 +304,7 @@ export class WorkerImpl implements Worker {
       }
     } catch (err) {
       if (err instanceof SuspendedError) {
-        await this.updateInvocationStatus(invocation.id, "suspended");
+        await this.setInvocationStatus(invocation, "suspended");
         await this.ack(serviceName, msg.messageId);
         return;
       }
@@ -274,9 +312,9 @@ export class WorkerImpl implements Worker {
       const attempt = Number.parseInt(msg.attempt, 10);
       const errorMsg = err instanceof Error ? err.message : String(err);
 
-      if (attempt + 1 >= invocation.maxRetries) {
+      if (attempt >= invocation.maxRetries) {
         await this.dlq.push(invocation, errorMsg);
-        await this.failInvocation(invocation.id, errorMsg);
+        await this.failInvocation(invocation, errorMsg);
         await this.ack(serviceName, msg.messageId);
         await this.publishCompletion(invocation.id, "failed", undefined, errorMsg);
 
@@ -286,6 +324,7 @@ export class WorkerImpl implements Worker {
         }
       } else {
         const delay = computeRetryDelay(attempt, this.config.retry);
+        await this.setInvocationStatus(invocation, "pending");
         await this.timerStore.schedule(
           { invocationId: invocation.id, type: "retry" },
           Date.now() + delay,
@@ -327,7 +366,7 @@ export class WorkerImpl implements Worker {
     const now = Date.now();
 
     if (record.id) {
-      return parseInvocationRecord(record, serviceName, msg.args);
+      return parseInvocationRecord(record, { service: serviceName, args: msg.args });
     }
 
     const invocation: Invocation = {
@@ -369,34 +408,107 @@ export class WorkerImpl implements Worker {
         : []),
     );
 
+    await this.incrementMetrics(serviceName, { pending: 1 });
+
     return invocation;
   }
 
-  private async updateInvocationStatus(
-    id: InvocationId,
+  private async setInvocationStatus(
+    invocation: Invocation,
     status: Invocation["status"],
+    extraFields: Record<string, string> = {},
   ): Promise<void> {
-    const invKey = keys(this.config.redis.keyPrefix).invocation(id);
-    await this.redis.hset(invKey, "status", status);
-    await this.redis.hset(invKey, "updatedAt", String(Date.now()));
+    const invKey = keys(this.config.redis.keyPrefix).invocation(invocation.id);
+    const now = Date.now();
+    await this.redis.hmset(
+      invKey,
+      ...flattenFields({
+        status,
+        updatedAt: String(now),
+        ...extraFields,
+      }),
+    );
+    await this.applyStatusMetrics(invocation, status);
+    invocation.status = status;
   }
 
-  private async completeInvocation(id: InvocationId, result?: string): Promise<void> {
-    const invKey = keys(this.config.redis.keyPrefix).invocation(id);
-    await this.redis.hset(invKey, "status", "completed");
-    await this.redis.hset(invKey, "updatedAt", String(Date.now()));
-    await this.redis.hset(invKey, "completedAt", String(Date.now()));
-    if (result !== undefined) {
-      await this.redis.hset(invKey, "result", result);
+  private async applyStatusMetrics(
+    invocation: Invocation,
+    nextStatus: Invocation["status"],
+  ): Promise<void> {
+    const current = invocation.status;
+    if (current === nextStatus) {
+      return;
+    }
+
+    const deltas: Partial<Record<MetricField, number>> = {};
+    const isTerminal =
+      nextStatus === "completed" || nextStatus === "failed" || nextStatus === "cancelled";
+
+    if (current === "pending" && nextStatus === "running") {
+      deltas.pending = -1;
+      deltas.active = 1;
+    } else if (current === "suspended" && nextStatus === "running") {
+      deltas.pending = -1;
+      deltas.active = 1;
+      deltas.replayed = 1;
+    } else if (current === "running" && nextStatus === "suspended") {
+      deltas.active = -1;
+      deltas.pending = 1;
+    } else if (current === "running" && nextStatus === "pending") {
+      deltas.active = -1;
+      deltas.pending = 1;
+    } else if ((current === "pending" || current === "suspended") && isTerminal) {
+      deltas.pending = -1;
+    } else if (current === "running" && isTerminal) {
+      deltas.active = -1;
+    }
+
+    if (Object.keys(deltas).length > 0) {
+      await this.incrementMetrics(invocation.service, deltas);
     }
   }
 
-  private async failInvocation(id: InvocationId, error: string): Promise<void> {
-    const invKey = keys(this.config.redis.keyPrefix).invocation(id);
-    await this.redis.hset(invKey, "status", "failed");
-    await this.redis.hset(invKey, "error", error);
-    await this.redis.hset(invKey, "updatedAt", String(Date.now()));
-    await this.redis.hset(invKey, "completedAt", String(Date.now()));
+  private async completeInvocation(invocation: Invocation, result?: string): Promise<void> {
+    const completedAt = Date.now();
+    const fields: Record<string, string> = {
+      completedAt: String(completedAt),
+      ...(result !== undefined ? { result } : {}),
+    };
+    await this.setInvocationStatus(invocation, "completed", fields);
+    await this.recordCompletionMetrics(invocation, "completed", completedAt);
+    await this.applyRetention(invocation);
+  }
+
+  private async failInvocation(invocation: Invocation, error: string): Promise<void> {
+    const completedAt = Date.now();
+    await this.setInvocationStatus(invocation, "failed", {
+      completedAt: String(completedAt),
+      error,
+    });
+    await this.recordCompletionMetrics(invocation, "failed", completedAt);
+    await this.applyRetention(invocation);
+  }
+
+  private async recordCompletionMetrics(
+    invocation: Invocation,
+    status: "completed" | "failed",
+    completedAt: number,
+  ): Promise<void> {
+    const steps = await this.journal.length(invocation.id);
+    const durationMs = Math.max(0, completedAt - invocation.createdAt);
+    await this.incrementMetrics(invocation.service, {
+      totalSteps: steps,
+      totalDurationMs: durationMs,
+      ...(status === "completed" ? { completed: 1 } : { failed: 1 }),
+    });
+  }
+
+  private async applyRetention(invocation: Invocation): Promise<void> {
+    const invKey = keys(this.config.redis.keyPrefix).invocation(invocation.id);
+    const journalKey = keys(this.config.redis.keyPrefix).journal(invocation.id);
+    await this.redis.pexpire(invKey, this.config.retention.invocationTtlMs);
+    await this.redis.pexpire(journalKey, this.config.retention.journalTtlMs);
   }
 
   private async publishCompletion(
@@ -405,55 +517,40 @@ export class WorkerImpl implements Worker {
     result?: string,
     error?: string,
   ): Promise<void> {
-    const key = keys(this.config.redis.keyPrefix).completion(invocationId);
+    const completionKey = keys(this.config.redis.keyPrefix).completion(invocationId);
+    const queueKey = keys(this.config.redis.keyPrefix).completionQueue(invocationId);
     const payload = JSON.stringify({ status, result, error });
-    await this.redis.set(key, payload);
+    await this.redis.set(completionKey, payload);
+    await this.redis.pexpire(completionKey, this.config.retention.completionTtlMs);
+    await this.redis.rpush(queueKey, payload);
+    await this.redis.pexpire(queueKey, this.config.retention.completionTtlMs);
   }
-}
 
-function parseStreamMessage(messageId: string, fields: string[]): StreamMessage {
-  const parsed: Record<string, string> = {};
-  for (let index = 0; index < fields.length; index += 2) {
-    const key = fields[index];
-    const value = fields[index + 1];
-    if (key != null && value != null) {
-      parsed[key] = value;
+  private async incrementMetrics(
+    serviceName: string,
+    deltas: Partial<Record<MetricField, number>>,
+  ): Promise<void> {
+    const entries = Object.entries(deltas).filter(
+      (entry): entry is [string, number] => entry[1] !== undefined && entry[1] !== 0,
+    );
+    if (entries.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      [serviceName, "all"].map((service) => this.applyMetricDeltas(service, entries)),
+    );
+  }
+
+  private async applyMetricDeltas(
+    serviceName: string,
+    entries: Array<[string, number]>,
+  ): Promise<void> {
+    const metricsKey = keys(this.config.redis.keyPrefix).metrics(serviceName);
+    for (const [field, value] of entries) {
+      await this.redis.hincrby(metricsKey, field, value);
     }
   }
-
-  return {
-    messageId,
-    invocationId: parsed.invocationId ?? "",
-    handler: parsed.handler ?? "",
-    args: parsed.args ?? "",
-    attempt: parsed.attempt ?? "0",
-    ...(parsed.key ? { key: parsed.key } : {}),
-  };
-}
-
-function parseInvocationRecord(
-  record: Record<string, string>,
-  serviceName: string,
-  fallbackArgs: string,
-): Invocation {
-  const argsRaw = record.args ?? fallbackArgs ?? "null";
-  return {
-    id: record.id ?? "",
-    service: record.service ?? serviceName,
-    handler: record.handler ?? "",
-    args: safeJsonParse(argsRaw, null),
-    status: (record.status as Invocation["status"]) ?? "pending",
-    attempt: Number.parseInt(record.attempt ?? "0", 10),
-    maxRetries: Number.parseInt(record.maxRetries ?? "0", 10),
-    createdAt: Number.parseInt(record.createdAt ?? "0", 10),
-    updatedAt: Number.parseInt(record.updatedAt ?? "0", 10),
-    ...(record.key ? { key: record.key } : {}),
-    ...(record.completedAt ? { completedAt: Number.parseInt(record.completedAt, 10) } : {}),
-    ...(record.result ? { result: record.result } : {}),
-    ...(record.error ? { error: record.error } : {}),
-    ...(record.parentId ? { parentId: record.parentId } : {}),
-    ...(record.parentStep ? { parentStep: Number.parseInt(record.parentStep, 10) } : {}),
-  };
 }
 
 function safeJsonParse<T>(value: string, fallback: T): T {
@@ -462,6 +559,13 @@ function safeJsonParse<T>(value: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function isNoGroupError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.message.includes("NOGROUP");
 }
 
 function computeRetryDelay(attempt: number, retry: ResolvedConfig["retry"]): number {

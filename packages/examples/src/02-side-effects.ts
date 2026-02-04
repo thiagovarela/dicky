@@ -7,10 +7,10 @@
  */
 import { strict as assert } from "node:assert";
 import { Dicky, service } from "@dicky/dicky";
+import { z } from "zod";
 import { createConfig, withCleanup } from "./setup";
 
 const config = createConfig("ex-02");
-const dicky = new Dicky(config);
 
 let sendCount = 0;
 let attempts = 0;
@@ -18,22 +18,33 @@ let shouldFail = true;
 
 type SendWelcomeResult = { messageId: string; attempts: number; sendCount: number };
 
-dicky.use(
+const sendWelcomeSchema = z.object({ userId: z.string() });
+
+type SendWelcomeArgs = z.infer<typeof sendWelcomeSchema>;
+
+const dicky = new Dicky(config).use(
   service("mailer", {
-    sendWelcome: async (ctx, args: unknown) => {
-      const { userId } = args as { userId: string };
-      attempts += 1;
-      const messageId = await ctx.run("send-email", async () => {
-        sendCount += 1;
-        return `email-${userId}`;
-      });
+    sendWelcome: {
+      input: sendWelcomeSchema,
+      output: z.object({
+        messageId: z.string(),
+        attempts: z.number(),
+        sendCount: z.number(),
+      }),
+      handler: async (ctx, { userId }: SendWelcomeArgs) => {
+        attempts += 1;
+        const messageId = await ctx.run("send-email", async () => {
+          sendCount += 1;
+          return `email-${userId}`;
+        });
 
-      if (shouldFail) {
-        shouldFail = false;
-        throw new Error("Temporary email outage");
-      }
+        if (shouldFail) {
+          shouldFail = false;
+          throw new Error("Temporary email outage");
+        }
 
-      return { messageId, attempts, sendCount } satisfies SendWelcomeResult;
+        return { messageId, attempts, sendCount } satisfies SendWelcomeResult;
+      },
     },
   }),
 );
@@ -45,9 +56,9 @@ export async function run() {
   attempts = 0;
   shouldFail = true;
 
-  const result = (await dicky.invoke("mailer", "sendWelcome", {
+  const result = await dicky.invoke("mailer", "sendWelcome", {
     userId: "user-42",
-  })) as SendWelcomeResult;
+  });
   assert.equal(result.messageId, "email-user-42");
   assert.equal(result.sendCount, 1);
   assert.equal(sendCount, 1);

@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { z } from "zod";
 import { Dicky } from "../../dicky";
 import { service } from "../../define";
 import {
   buildIntegrationConfig,
   clearRedis,
+  integrationEnabled,
   startRedis,
   stopRedis,
   testConfig,
@@ -11,8 +13,6 @@ import {
 } from "./setup";
 import { createRedisClient, IoredisClient } from "../../stores/redis";
 import { buildRedisUrl } from "../../config";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
 (integrationEnabled ? describe : describe.skip)("Integration: Awakeables", () => {
   const prefix = "test:awakeable:";
@@ -35,11 +35,15 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("payment", {
-        checkout: async (ctx, { orderId }: { orderId: string }) => {
-          await ctx.run("create-charge", () => ({ orderId, status: "pending" }));
-          const [, promise] = await ctx.awakeable("webhook");
-          const webhook = await promise;
-          return webhook;
+        checkout: {
+          input: z.object({ orderId: z.string() }),
+          output: z.any(),
+          handler: async (ctx, { orderId }: { orderId: string }) => {
+            await ctx.run("create-charge", () => ({ orderId, status: "pending" }));
+            const [, promise] = await ctx.awakeable("webhook");
+            const webhook = await promise;
+            return webhook;
+          },
         },
       }),
     );
@@ -70,9 +74,13 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 
     dicky.use(
       service("payment", {
-        checkout: async (ctx, { orderId: _orderId }: { orderId: string }) => {
-          const [, promise] = await ctx.awakeable("webhook");
-          return promise;
+        checkout: {
+          input: z.object({ orderId: z.string() }),
+          output: z.any(),
+          handler: async (ctx, { orderId: _orderId }: { orderId: string }) => {
+            const [, promise] = await ctx.awakeable("webhook");
+            return promise;
+          },
         },
       }),
     );

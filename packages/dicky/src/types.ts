@@ -155,7 +155,7 @@ export interface LogConfig {
   level?: "debug" | "info" | "warn" | "error";
 }
 
-export interface DQConfig {
+export interface DickyConfig {
   redis: RedisConfig;
   worker?: WorkerConfig;
   retry?: RetryConfig;

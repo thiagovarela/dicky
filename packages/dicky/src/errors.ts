@@ -89,8 +89,8 @@ export function deserializeError(serialized: SerializedError): Error {
       );
       return applyStack(error);
     }
-    case "DQError": {
-      const error = new DQError(serialized.code as string, serialized.message as string);
+    case "DickyError": {
+      const error = new DickyError(serialized.code as string, serialized.message as string);
       return applyStack(error);
     }
     default: {
@@ -180,13 +180,13 @@ export class TimeoutError extends Error {
   }
 }
 
-export class DQError extends Error {
+export class DickyError extends Error {
   constructor(
     readonly code: string,
     message: string,
   ) {
     super(message);
-    finalizeError(this, "DQError", new.target);
+    finalizeError(this, "DickyError", new.target);
   }
 
   toJSON(): SerializedError {

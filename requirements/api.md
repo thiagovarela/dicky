@@ -24,11 +24,11 @@ export const onboarding = service('onboarding', {
 ## Client definition
 
 ```typescript
-import { dicky } from '@dicky/dicky';
+import { Dicky } from '@dicky/dicky';
 
 import { onboarding } from './services/onboarding';
 
-export const dq = new dicky({ url: env.REDIS_URL })
+export const dicky = new Dicky({ url: env.REDIS_URL })
   .add(onboarding)
   
 ```
@@ -36,10 +36,10 @@ export const dq = new dicky({ url: env.REDIS_URL })
 ## Consumer
 
 ```typescript
-import { dq } from '@lib/dicky';
+import { dicky } from '@lib/dicky';
 
 // Fully type safe
-await dq.send('onboarding', 'welcome', { userId: user.id });
+await dicky.send('onboarding', 'welcome', { userId: user.id });
   
 ```
 
@@ -47,21 +47,21 @@ await dq.send('onboarding', 'welcome', { userId: user.id });
 ### Advanced dispatch options
 
 ```typescript
-import { dq } from '@lib/dicky';
+import { dicky } from '@lib/dicky';
 
 // Delayed execution
-await dq.send('onboarding', 'remind', { userId: '123', msg: 'Hey' }, { delay: '30m' });
+await dicky.send('onboarding', 'remind', { userId: '123', msg: 'Hey' }, { delay: '30m' });
 
 // Idempotent (deduplicates by key)
-await dq.send('onboarding', 'welcome', { userId: '123' }, {
+await dicky.send('onboarding', 'welcome', { userId: '123' }, {
   idempotencyKey: `welcome:${userId}`,
 });
 
 // Override max retries
-await dq.send('onboarding', 'welcome', { userId: '123' }, { maxRetries: 5 });
+await dicky.send('onboarding', 'welcome', { userId: '123' }, { maxRetries: 5 });
 
 // Invoke with timeout
-const result = await dq.invoke('wallet', 'deposit',
+const result = await dicky.invoke('wallet', 'deposit',
   { amount: 50 },
   { key: 'user_123', timeoutMs: 10_000 },
 );
@@ -93,7 +93,7 @@ export const payments = service('payments', {
 // In a webhook handler — resolve the awakeable
 app.post('/webhooks/stripe', async (req, reply) => {
   const awakeableId = await db.getAwakeableId(req.body.orderId);
-  await dq.resolveAwakeable(awakeableId, { status: req.body.status });
+  await dicky.resolveAwakeable(awakeableId, { status: req.body.status });
   return reply.status(200).send();
 });
 ```
@@ -126,14 +126,14 @@ export const orders = service('orders', {
 
 ```typescript
 // main.ts
-import { dq } from '@lib/dicky';
+import { dicky } from '@lib/dicky';
 
-await dq.start();
+await dicky.start();
 await app.listen({ port: 3000 });
 
 const shutdown = async () => {
   await app.close();
-  await dq.stop();
+  await dicky.stop();
   process.exit(0);
 };
 
@@ -356,7 +356,7 @@ export interface RedisConfig {
   port: number;
   password?: string;
   db?: number;
-  keyPrefix?: string;  // default: 'dq:'
+  keyPrefix?: string;  // default: 'dicky:'
   tls?: boolean;
 }
 
@@ -392,7 +392,7 @@ export interface LogConfig {
   logger?: Logger;
 }
 
-export interface DQConfig {
+export interface DickyConfig {
   redis: RedisConfig;
   worker?: WorkerConfig;
   retry?: RetryConfig;
@@ -496,7 +496,7 @@ import type { DurableContext, ServiceDef, ObjectDef, Handler } from './types.js'
 
 /**
  * Define a stateless service. Returns a typed definition
- * to pass to `dq.use()`.
+ * to pass to `dicky.use()`.
  */
 export function service<
   TName extends string,
@@ -511,7 +511,7 @@ export function service<
 
 /**
  * Define a virtual object (keyed, stateful, single-writer).
- * Returns a typed definition to pass to `dq.use()`.
+ * Returns a typed definition to pass to `dicky.use()`.
  */
 export function object<
   TName extends string,
@@ -533,15 +533,15 @@ export function object<
 }
 ```
 
-## DQ Class — Public API (`src/dq.ts`)
+## Dicky Class — Public API (`src/dicky.ts`)
 
-The `DQ` class is the single entry point. It accumulates type information through `.use()` calls and delegates to internal modules.
+The `Dicky` class is the single entry point. It accumulates type information through `.use()` calls and delegates to internal modules.
 
 ### Type-safe dispatch signatures
 
 ```typescript
 import type {
-  DQConfig,
+  DickyConfig,
   ResolvedConfig,
   Registry,
   AddToRegistry,
@@ -560,13 +560,13 @@ import type {
   RegisteredService,
 } from './types.js';
 
-export class DQ {
+export class Dicky {
   private services = new Map();
   private config: ResolvedConfig;
   private started = false;
   // ... worker, redis, logger, etc.
 
-  constructor(config: DQConfig) {
+  constructor(config: DickyConfig) {
     this.config = resolveConfig(config);
   }
 
@@ -578,19 +578,19 @@ export class DQ {
    */
   use>(
     def: ServiceDef,
-  ): DQ<AddToRegistry>;
+  ): Dicky<AddToRegistry>;
 
   /**
    * Register an object definition.
    */
   use>(
     def: ObjectDef,
-  ): DQ<AddToRegistry>;
+  ): Dicky<AddToRegistry>;
 
   /**
    * Implementation (single overload body).
    */
-  use(def: ServiceDef | ObjectDef): DQ {
+  use(def: ServiceDef | ObjectDef): Dicky {
     if (this.started) throw new Error('Cannot register after start()');
     if (this.services.has(def.name)) throw new Error(`Service "${def.name}" already registered`);
 
@@ -609,7 +609,7 @@ export class DQ {
       });
     }
 
-    return this as DQ;
+    return this as Dicky;
   }
 
   // ─── Dispatch: send (fire-and-forget) ───
@@ -648,7 +648,7 @@ export class DQ {
 
   /**
    * Dispatch and wait for the handler to complete.
-   * Uses Redis pub/sub on channel `dq:completion:{invocationId}`.
+   * Uses Redis pub/sub on channel `dicky:completion:{invocationId}`.
    */
   async invoke<
     S extends (keyof R & string) | (string & {}),
@@ -1859,14 +1859,14 @@ export class MetricsCollector {
 ### Custom Error Types (`src/errors.ts`)
 
 ```typescript
-export class DQError extends Error {
+export class DickyError extends Error {
   constructor(message: string, public readonly code: string, public override readonly cause?: unknown) {
     super(message);
-    this.name = 'DQError';
+    this.name = 'DickyError';
   }
 }
 
-export class SideEffectError extends DQError {
+export class SideEffectError extends DickyError {
   constructor(public readonly stepName: string, cause: unknown) {
     const msg = cause instanceof Error ? cause.message : String(cause);
     super(`Side effect "${stepName}" failed: ${msg}`, 'SIDE_EFFECT_FAILED', cause);
@@ -1874,7 +1874,7 @@ export class SideEffectError extends DQError {
   }
 }
 
-export class ReplayError extends DQError {
+export class ReplayError extends DickyError {
   constructor(public readonly stepName: string, public readonly journaledError: string) {
     super(`Replayed failure at "${stepName}": ${journaledError}`, 'REPLAY_FAILED');
     this.name = 'ReplayError';
@@ -1886,7 +1886,7 @@ export class ReplayError extends DQError {
  * Thrown by ctx.sleep() and ctx.awakeable() to suspend execution.
  * The worker catches this and ACKs the message.
  */
-export class SuspendedError extends DQError {
+export class SuspendedError extends DickyError {
   constructor(
     public readonly invocationId: string,
     public readonly sequence: number,
@@ -1897,28 +1897,28 @@ export class SuspendedError extends DQError {
   }
 }
 
-export class LockConflictError extends DQError {
+export class LockConflictError extends DickyError {
   constructor(public readonly objectName: string, public readonly objectKey: string) {
     super(`Cannot acquire lock for ${objectName}:${objectKey}`, 'LOCK_CONFLICT');
     this.name = 'LockConflictError';
   }
 }
 
-export class CancelledError extends DQError {
+export class CancelledError extends DickyError {
   constructor(public readonly invocationId: string) {
     super(`Invocation ${invocationId} was cancelled`, 'CANCELLED');
     this.name = 'CancelledError';
   }
 }
 
-export class TimeoutError extends DQError {
+export class TimeoutError extends DickyError {
   constructor(public readonly invocationId: string, public readonly timeoutMs: number) {
     super(`Timed out waiting for invocation ${invocationId} after ${timeoutMs}ms`, 'TIMEOUT');
     this.name = 'TimeoutError';
   }
 }
 
-export class MaxRetriesExceededError extends DQError {
+export class MaxRetriesExceededError extends DickyError {
   constructor(public readonly invocationId: string, public readonly attempts: number, cause: unknown) {
     const msg = cause instanceof Error ? cause.message : String(cause);
     super(`Invocation ${invocationId} failed after ${attempts} attempts: ${msg}`, 'MAX_RETRIES_EXCEEDED', cause);
@@ -1926,7 +1926,7 @@ export class MaxRetriesExceededError extends DQError {
   }
 }
 
-export class AwakeableError extends DQError {
+export class AwakeableError extends DickyError {
   constructor(awakeableId: string, reason: string) {
     super(`Awakeable ${awakeableId}: ${reason}`, 'AWAKEABLE_ERROR');
     this.name = 'AwakeableError';
@@ -1938,7 +1938,7 @@ export class AwakeableError extends DQError {
 
 ```typescript
 import { nanoid } from 'nanoid';
-import type { DQConfig, ResolvedConfig } from './types.js';
+import type { DickyConfig, ResolvedConfig } from './types.js';
 
 // ─── ID generators ───
 
@@ -1962,14 +1962,14 @@ export function parseDuration(input: string): number {
 
 // ─── Config resolution ───
 
-export function resolveConfig(config: DQConfig): ResolvedConfig {
+export function resolveConfig(config: DickyConfig): ResolvedConfig {
   return {
     redis: {
       host: config.redis.host,
       port: config.redis.port,
       password: config.redis.password,
       db: config.redis.db ?? 0,
-      keyPrefix: config.redis.keyPrefix ?? 'dq:',
+      keyPrefix: config.redis.keyPrefix ?? 'dicky:',
       tls: config.redis.tls,
     },
     worker: {
@@ -2033,7 +2033,7 @@ export function keys(prefix: string) {
 Atomic check-and-write for journal entries. Prevents double-write if two workers somehow process the same invocation.
 
 ```lua
--- KEYS[1] = journal hash key (dq:journal:{invocationId})
+-- KEYS[1] = journal hash key (dicky:journal:{invocationId})
 -- ARGV[1] = sequence number (field name)
 -- ARGV[2] = serialized JournalEntry (value)
 -- Returns: 1 if written, 0 if already exists
@@ -2051,7 +2051,7 @@ return 1
 Atomically pop expired timers from the sorted set.
 
 ```lua
--- KEYS[1] = timer sorted set key (dq:timers)
+-- KEYS[1] = timer sorted set key (dicky:timers)
 -- ARGV[1] = current timestamp (unix ms)
 -- ARGV[2] = max count to pop
 -- Returns: array of expired timer entries (JSON strings)
@@ -2069,7 +2069,7 @@ return expired
 Atomic lock acquisition with TTL.
 
 ```lua
--- KEYS[1] = lock key (dq:lock:{objectName}:{key})
+-- KEYS[1] = lock key (dicky:lock:{objectName}:{key})
 -- ARGV[1] = lock token
 -- ARGV[2] = TTL in milliseconds
 -- Returns: 1 if acquired, 0 if conflict
@@ -2204,7 +2204,7 @@ Build and test in this order. Each layer builds on the previous.
 12. **DLQ**: `dlq.ts`
 13. **Metrics**: `metrics.ts`
 14. **Define factories**: `define.ts` (service/object factory functions)
-15. **DQ class**: `dq.ts` (composes everything, .use() method, dispatch, lifecycle)
+15. **Dicky class**: `dicky.ts` (composes everything, .use() method, dispatch, lifecycle)
 16. **Public exports**: `index.ts`
 17. **Replay tests**: `test/replay.test.ts`
 18. **Integration tests**: `test/integration.test.ts`

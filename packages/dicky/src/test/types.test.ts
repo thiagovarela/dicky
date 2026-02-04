@@ -2,7 +2,7 @@ import { describe, it, expect } from "bun:test";
 import type {
   AddToRegistry,
   ArgsOf,
-  DQConfig,
+  DickyConfig,
   DurableContext,
   Handler,
   ObjectDef,
@@ -59,7 +59,7 @@ void typeAssertions;
 
 describe("types", () => {
   it("accepts configuration shape", () => {
-    const config: DQConfig = {
+    const config: DickyConfig = {
       redis: { host: "localhost", port: 6379 },
       worker: { concurrency: 5 },
     };

@@ -38,9 +38,9 @@ Your Node.js App
 ## Quick Example
 
 ```typescript
-import { dq } from 'dicky'
+import { dicky } from 'dicky'
 
-const userService = dq.service('users')
+const userService = dicky.service('users')
   .method('sendWelcomeEmail', async (ctx, { userId }) => {
     await ctx.sideEffect(async () => {
       await emailProvider.send(userId, 'Welcome!')
@@ -53,9 +53,9 @@ const userService = dq.service('users')
     return { processed: true }
   })
 
-dq.use(userService)
+dicky.use(userService)
 
-dq.listen(3000)
+dicky.listen(3000)
 ```
 
 ## Durable Execution Guarantees
@@ -112,7 +112,7 @@ Define services in separate files with full type inference:
 
 ```typescript
 // services/users.ts
-export const userService = dq.service('users')
+export const userService = dicky.service('users')
   .method('getProfile', async (ctx, { id }) => {
     return db.user.find(id)
   })
@@ -124,12 +124,12 @@ export const userService = dq.service('users')
 import { userService } from './services/users'
 import { orderService } from './services/orders'
 
-dq.use(userService)
-dq.use(orderService)
+dicky.use(userService)
+dicky.use(orderService)
 
 // Full autocomplete available here:
-dq.services.       // → users, orders
-dq.services.users. // → getProfile, updateProfile
+dicky.services.       // → users, orders
+dicky.services.users. // → getProfile, updateProfile
 ```
 
 ## Installation

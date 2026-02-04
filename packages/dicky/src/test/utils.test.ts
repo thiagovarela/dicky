@@ -24,21 +24,21 @@ describe("parseDuration", () => {
 
 describe("keys", () => {
   it("builds prefixed keys", () => {
-    const prefixed = keys("dq:");
+    const prefixed = keys("dicky:");
 
-    expect(prefixed.stream("orders")).toBe("dq:stream:orders");
-    expect(prefixed.consumerGroup("orders")).toBe("dq:cg:orders");
-    expect(prefixed.consumerName("worker1")).toBe("dq:worker:worker1");
-    expect(prefixed.journal("inv1")).toBe("dq:journal:inv1");
-    expect(prefixed.invocation("inv1")).toBe("dq:invocation:inv1");
-    expect(prefixed.state("cart", "key")).toBe("dq:state:cart:key");
-    expect(prefixed.lock("cart", "key")).toBe("dq:lock:cart:key");
-    expect(prefixed.timers()).toBe("dq:timers");
-    expect(prefixed.awakeable("awake1")).toBe("dq:awakeable:awake1");
-    expect(prefixed.dlq("orders")).toBe("dq:dlq:orders");
-    expect(prefixed.completion("inv1")).toBe("dq:completion:inv1");
-    expect(prefixed.idempotency("key1")).toBe("dq:idempotent:key1");
-    expect(prefixed.metrics("orders")).toBe("dq:metrics:orders");
+    expect(prefixed.stream("orders")).toBe("dicky:stream:orders");
+    expect(prefixed.consumerGroup("orders")).toBe("dicky:cg:orders");
+    expect(prefixed.consumerName("worker1")).toBe("dicky:worker:worker1");
+    expect(prefixed.journal("inv1")).toBe("dicky:journal:inv1");
+    expect(prefixed.invocation("inv1")).toBe("dicky:invocation:inv1");
+    expect(prefixed.state("cart", "key")).toBe("dicky:state:cart:key");
+    expect(prefixed.lock("cart", "key")).toBe("dicky:lock:cart:key");
+    expect(prefixed.timers()).toBe("dicky:timers");
+    expect(prefixed.awakeable("awake1")).toBe("dicky:awakeable:awake1");
+    expect(prefixed.dlq("orders")).toBe("dicky:dlq:orders");
+    expect(prefixed.completion("inv1")).toBe("dicky:completion:inv1");
+    expect(prefixed.idempotency("key1")).toBe("dicky:idempotent:key1");
+    expect(prefixed.metrics("orders")).toBe("dicky:metrics:orders");
   });
 });
 

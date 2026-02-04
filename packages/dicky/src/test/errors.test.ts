@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   AwakeableError,
-  DQError,
+  DickyError,
   LockConflictError,
   ReplayError,
   SuspendedError,
@@ -17,14 +17,14 @@ describe("errors", () => {
     const conflict = new LockConflictError("cart", "key-1");
     const awakeable = new AwakeableError("awake_1", "missing");
     const timeout = new TimeoutError("inv_456", "handler", 5000);
-    const dq = new DQError("E_TEST", "test message");
+    const dickyError = new DickyError("E_TEST", "test message");
 
     expect(suspended.message).toContain("inv_123");
     expect(replay.message).toContain("step-1");
     expect(conflict.message).toContain("cart");
     expect(awakeable.message).toContain("awake_1");
     expect(timeout.message).toContain("5000");
-    expect(dq.message).toContain("test message");
+    expect(dickyError.message).toContain("test message");
   });
 
   it("supports instanceof checks", () => {

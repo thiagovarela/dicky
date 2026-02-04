@@ -25,7 +25,7 @@
     "rootDir": "src",
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "composite": false,
+    "composite": true,
     "incremental": true
   },
   "include": ["src/**/*"],

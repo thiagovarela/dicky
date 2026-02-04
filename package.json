@@ -16,7 +16,8 @@
     "format": "bun run --filter @dicky/dicky format",
     "format:check": "bun run --filter @dicky/dicky format:check",
     "lint-staged": "lint-staged",
-    "prepare": "husky"
+    "prepare": "husky",
+    "examples:test": "bun run --filter @dicky/examples test"
   },
   "lint-staged": {
     "packages/dicky/src/**/*.{ts,tsx}": [

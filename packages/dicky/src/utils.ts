@@ -16,9 +16,26 @@ export function keys(prefix: string) {
     awakeable: (awakeableId: string) => `${prefix}awakeable:${awakeableId}`,
     dlq: (service: string) => `${prefix}dlq:${service}`,
     completion: (invocationId: string) => `${prefix}completion:${invocationId}`,
+    completionQueue: (invocationId: string) => `${prefix}completion-queue:${invocationId}`,
     idempotency: (key: string) => `${prefix}idempotent:${key}`,
     metrics: (service: string) => `${prefix}metrics:${service}`,
   };
+}
+
+/**
+ * Flatten a key/value object into a Redis argument array.
+ */
+export function flattenFields(fields: Record<string, string>): string[] {
+  return Object.entries(fields).flatMap(([key, value]) => [key, value]);
+}
+
+/**
+ * Validate service and handler identifiers.
+ */
+export function validateIdentifier(name: string, label: string): void {
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error(`${label} must contain only letters, numbers, hyphens, or underscores`);
+  }
 }
 
 /**

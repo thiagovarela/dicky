@@ -93,6 +93,16 @@ function createConfig(retryMaxRetries = 2): ResolvedConfig {
       maxDelayMs: 10,
       backoffMultiplier: 2,
     },
+    retention: {
+      completionTtlMs: 60 * 60 * 1000,
+      invocationTtlMs: 24 * 60 * 60 * 1000,
+      journalTtlMs: 24 * 60 * 60 * 1000,
+      idempotencyTtlMs: 24 * 60 * 60 * 1000,
+    },
+    shutdown: {
+      handleSignals: false,
+      signals: ["SIGINT", "SIGTERM"],
+    },
     log: { level: "info" },
   };
 }
@@ -196,7 +206,7 @@ describe("Worker", () => {
         throw new Error("fail");
       },
       "service",
-      1,
+      0,
     );
 
     const msg: StreamMessage = {

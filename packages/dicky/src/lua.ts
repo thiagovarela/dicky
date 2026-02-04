@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { extname, join, basename } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RedisClient } from "./stores/redis";
 
 export interface LuaScripts {
@@ -11,7 +13,7 @@ export class LuaScriptsImpl implements LuaScripts {
   private shas = new Map<string, string>();
   private scriptDir: string;
 
-  constructor(scriptDir: string = join(process.cwd(), "src", "lua")) {
+  constructor(scriptDir: string = resolveDefaultScriptDir()) {
     this.scriptDir = scriptDir;
   }
 
@@ -52,4 +54,22 @@ export class LuaScriptsImpl implements LuaScripts {
       throw error;
     }
   }
+}
+
+function resolveDefaultScriptDir(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(moduleDir, "lua"),
+    join(moduleDir, "..", "lua"),
+    join(moduleDir, "..", "src", "lua"),
+    join(process.cwd(), "src", "lua"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return join(process.cwd(), "src", "lua");
 }

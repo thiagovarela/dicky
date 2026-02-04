@@ -2,13 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { LuaScriptsImpl } from "../lua";
 import { keys } from "../utils";
 import type { RedisClient } from "../stores/redis";
-import { setupTestRedis, teardownTestRedis } from "./setup";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
+import { integrationEnabled, setupTestRedis, teardownTestRedis } from "./setup";
 
 (integrationEnabled ? describe : describe.skip)("LuaScripts", () => {
   const prefix = "test:lua:";
-  let redis: RedisClient;
+  let redis: RedisClient | null = null;
   let scripts: LuaScriptsImpl;
 
   beforeAll(async () => {
@@ -22,7 +20,9 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
   });
 
   afterAll(async () => {
-    await teardownTestRedis(redis, prefix);
+    if (redis) {
+      await teardownTestRedis(redis, prefix);
+    }
   });
 
   it("loads scripts and caches SHAs", () => {

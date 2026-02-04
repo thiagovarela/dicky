@@ -81,7 +81,6 @@ function createContext(invocationId = "inv_1") {
     stateStore,
     awakeableStore,
     streamProducer,
-    { initialState: { count: 0 } },
     { count: 0 },
   );
 

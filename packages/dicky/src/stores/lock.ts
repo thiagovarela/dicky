@@ -47,7 +47,11 @@ export class LockManagerImpl implements LockManager {
 }
 
 class LockGuardImpl implements LockGuard {
+  private static readonly finalizer = new FinalizationRegistry<ReturnType<typeof setInterval>>(
+    (timer) => clearInterval(timer),
+  );
   private renewTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly finalizerToken = {};
 
   constructor(
     private redis: RedisClient,
@@ -59,11 +63,17 @@ class LockGuardImpl implements LockGuard {
     readonly objectName: string,
     readonly key: string,
   ) {
-    this.renewTimer = setInterval(() => {
-      this.scripts
-        .eval(this.redis, "lock-renew", [this.lockKey], [this.token, String(this.ttlMs)])
-        .catch(() => this.stopRenew());
+    const guardRef = new WeakRef(this);
+    const timer = setInterval(() => {
+      const guard = guardRef.deref();
+      if (!guard) {
+        clearInterval(timer);
+        return;
+      }
+      guard.renew().catch(() => guard.stopRenew());
     }, renewMs);
+    this.renewTimer = timer;
+    LockGuardImpl.finalizer.register(this, timer, this.finalizerToken);
   }
 
   async release(): Promise<void> {
@@ -71,10 +81,18 @@ class LockGuardImpl implements LockGuard {
     await this.scripts.eval(this.redis, "lock-release", [this.lockKey], [this.token]);
   }
 
+  private async renew(): Promise<void> {
+    await this.scripts.eval(this.redis, "lock-renew", [this.lockKey], [
+      this.token,
+      String(this.ttlMs),
+    ]);
+  }
+
   private stopRenew(): void {
     if (this.renewTimer) {
       clearInterval(this.renewTimer);
       this.renewTimer = null;
+      LockGuardImpl.finalizer.unregister(this.finalizerToken);
     }
   }
 }

@@ -2,6 +2,9 @@ import { buildRedisUrl } from "../../config";
 import type { DickyConfig, InvocationStatus } from "../../types";
 import { createRedisClient, IoredisClient } from "../../stores/redis";
 import type { Dicky } from "../../dicky";
+import { ensureDockerDaemon, isDockerAvailable } from "../setup";
+
+export { integrationEnabled } from "../setup";
 
 export const testConfig = {
   redis: {
@@ -18,6 +21,15 @@ export async function startRedis(): Promise<void> {
   if (process.env.REDIS_URL) {
     await waitForRedis();
     return;
+  }
+
+  if (!isDockerAvailable()) {
+    const started = await ensureDockerDaemon();
+    if (!started) {
+      throw new Error(
+        "Docker is required for integration tests. Set REDIS_URL or install/start Docker.",
+      );
+    }
   }
 
   const { exitCode } = Bun.spawnSync({

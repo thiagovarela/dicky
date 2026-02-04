@@ -1,8 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { MockRedisClient, createRedisClient } from "../../stores/redis";
-import { setupTestRedis, teardownTestRedis } from "../setup";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
+import { integrationEnabled, setupTestRedis, teardownTestRedis } from "../setup";
 
 describe("MockRedisClient", () => {
   it("tracks calls and respects delays", async () => {

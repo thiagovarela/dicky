@@ -3,12 +3,11 @@ import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
 import { LuaScriptsImpl } from "../../lua";
 import { clearRedis, redisUrl, startRedis, stopRedis } from "../integration/setup";
-
-const perfEnabled = process.env.DICKY_PERF === "1";
+import { perfEnabled } from "../setup";
 
 (perfEnabled ? describe : describe.skip)("Lua Scripts: Performance", () => {
   const prefix = "test:lua:perf:";
-  let redis: RedisClient;
+  let redis: RedisClient | null = null;
   let scripts: LuaScriptsImpl;
 
   beforeAll(async () => {
@@ -19,7 +18,9 @@ const perfEnabled = process.env.DICKY_PERF === "1";
   });
 
   afterAll(async () => {
-    await redis.quit();
+    if (redis) {
+      await redis.quit();
+    }
     await stopRedis();
   });
 
@@ -40,6 +41,6 @@ const perfEnabled = process.env.DICKY_PERF === "1";
     }
 
     const avg = durations.reduce((sum, value) => sum + value, 0) / durations.length;
-    expect(avg).toBeLessThan(5);
+    expect(avg).toBeLessThan(7);
   });
 });

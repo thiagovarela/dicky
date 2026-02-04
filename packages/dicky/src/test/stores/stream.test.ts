@@ -7,7 +7,7 @@ const prefix = "test:stream:";
 describe("StreamProducer", () => {
   it("enqueues messages", async () => {
     const redis = new MockRedisClient();
-    const producer = new StreamProducerImpl(redis, prefix);
+    const producer = new StreamProducerImpl(redis, prefix, 3, 86_400_000);
     const consumer = new StreamConsumerImpl(redis, prefix);
 
     await redis.xgroup(`${prefix}stream:orders`, "CREATE", "group", "0", "MKSTREAM");
@@ -22,7 +22,7 @@ describe("StreamProducer", () => {
 
   it("dispatches and stores invocation record", async () => {
     const redis = new MockRedisClient();
-    const producer = new StreamProducerImpl(redis, prefix);
+    const producer = new StreamProducerImpl(redis, prefix, 3, 86_400_000);
 
     const invocationId = await producer.dispatch("orders", "process", { id: 1 });
     const invocation = await redis.hgetall(`${prefix}invocation:${invocationId}`);
@@ -33,7 +33,7 @@ describe("StreamProducer", () => {
 
   it("consumes from multiple streams", async () => {
     const redis = new MockRedisClient();
-    const producer = new StreamProducerImpl(redis, prefix);
+    const producer = new StreamProducerImpl(redis, prefix, 3, 86_400_000);
     const consumer = new StreamConsumerImpl(redis, prefix);
 
     await redis.xgroup(`${prefix}stream:a`, "CREATE", "group", "0", "MKSTREAM");

@@ -18,11 +18,9 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
     private stateStore: StateStore,
     private awakeableStore: AwakeableStore,
     private streamProducer: StreamProducer,
-    private objectDef: { initialState?: TState } | undefined,
     initialState: TState,
   ) {
     this._state = initialState;
-    void this.objectDef;
   }
 
   get invocationId(): InvocationId {
@@ -52,7 +50,26 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
 
     try {
       const result = await fn();
-      const serialized = result !== undefined ? JSON.stringify(result) : undefined;
+      let serialized: string | undefined;
+      try {
+        serialized = result !== undefined ? JSON.stringify(result) : undefined;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        await this.journal.write({
+          invocationId: this.invocationId,
+          sequence: seq,
+          type: "run",
+          name,
+          status: "failed",
+          error: `Serialization failed: ${errorMsg}`,
+          createdAt: Date.now(),
+          completedAt: Date.now(),
+        });
+        throw new SerializationError(
+          errorMsg,
+          error instanceof Error ? error : new Error(errorMsg),
+        );
+      }
 
       await this.journal.write({
         invocationId: this.invocationId,
@@ -67,6 +84,9 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
 
       return result;
     } catch (error) {
+      if (error instanceof SerializationError) {
+        throw error.original;
+      }
       const errorMsg = error instanceof Error ? error.message : String(error);
       await this.journal.write({
         invocationId: this.invocationId,
@@ -250,7 +270,13 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
       throw new Error("Cannot set state without object key");
     }
 
-    const serialized = JSON.stringify(newState);
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(newState);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Serialization failed: ${errorMsg}`);
+    }
     await this.stateStore.set(this.invocation.service, this.invocation.key, serialized);
     this._state = newState;
 
@@ -264,5 +290,12 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
       createdAt: Date.now(),
       completedAt: Date.now(),
     });
+  }
+}
+
+class SerializationError extends Error {
+  constructor(message: string, readonly original: Error = new Error(message)) {
+    super(message);
+    this.name = "SerializationError";
   }
 }

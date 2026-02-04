@@ -1,6 +1,9 @@
 import { createRedisClient, IoredisClient, MockRedisClient } from "../stores/redis";
 import type { RedisClient, RedisClientOptions } from "../stores/redis";
 
+export const integrationEnabled = true;
+export const perfEnabled = true;
+
 export interface TestSetupOptions {
   prefix: string;
   redisUrl?: string;
@@ -9,6 +12,12 @@ export interface TestSetupOptions {
 
 export async function setupTestRedis(options: TestSetupOptions): Promise<RedisClient | null> {
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL ?? "redis://localhost:6379";
+
+  if (!options.redisUrl && !process.env.REDIS_URL && !isDockerAvailable()) {
+    throw new Error(
+      "Docker is required for Redis-backed tests. Set REDIS_URL or start Docker.",
+    );
+  }
 
   if (!options.redisUrl && !process.env.REDIS_URL) {
     await ensureDockerRedis();
@@ -34,6 +43,11 @@ export async function teardownTestRedis(client: RedisClient, prefix: string): Pr
 }
 
 async function ensureDockerRedis(): Promise<void> {
+  const available = await ensureDockerDaemon();
+  if (!available) {
+    return;
+  }
+
   try {
     const { exitCode } = Bun.spawnSync({
       cmd: ["docker", "compose", "-f", "docker-compose.yml", "ps", "-q", "redis"],
@@ -55,6 +69,24 @@ async function ensureDockerRedis(): Promise<void> {
   } catch (error) {
     console.warn("Docker not available, skipping auto-start:", error);
   }
+}
+
+
+export function isDockerAvailable(): boolean {
+  try {
+    const result = Bun.spawnSync({
+      cmd: ["docker", "info"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureDockerDaemon(): Promise<boolean> {
+  return isDockerAvailable();
 }
 
 async function clearPrefix(client: RedisClient, prefix: string): Promise<void> {

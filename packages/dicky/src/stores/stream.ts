@@ -1,4 +1,4 @@
-import { keys, newInvocationId, parseDuration } from "../utils";
+import { flattenFields, keys, newInvocationId, parseDuration } from "../utils";
 import type { RedisClient } from "./redis";
 import type { TimerEntry } from "./timer";
 
@@ -52,7 +52,34 @@ export class StreamProducerImpl implements StreamProducer {
   constructor(
     private redis: RedisClient,
     private prefix: string,
+    private defaultMaxRetries: number,
+    private idempotencyTtlMs: number,
   ) {}
+
+  private async incrementMetrics(
+    serviceName: string,
+    deltas: Record<string, number>,
+  ): Promise<void> {
+    const entries = Object.entries(deltas).filter(([, value]) => value !== 0);
+    if (entries.length === 0) {
+      return;
+    }
+
+    await Promise.all([
+      this.applyMetricDeltas(serviceName, entries),
+      this.applyMetricDeltas("all", entries),
+    ]);
+  }
+
+  private async applyMetricDeltas(
+    serviceName: string,
+    entries: Array<[string, number]>,
+  ): Promise<void> {
+    const metricsKey = keys(this.prefix).metrics(serviceName);
+    for (const [field, value] of entries) {
+      await this.redis.hincrby(metricsKey, field, value);
+    }
+  }
 
   async enqueue(
     serviceName: string,
@@ -138,7 +165,7 @@ export class StreamProducerImpl implements StreamProducer {
         args: serializedArgs,
         status: "pending",
         attempt: "0",
-        maxRetries: String(opts?.maxRetries ?? 3),
+        maxRetries: String(opts?.maxRetries ?? this.defaultMaxRetries),
         createdAt: String(Date.now()),
         updatedAt: String(Date.now()),
         ...(opts?.key ? { key: opts.key } : {}),
@@ -147,8 +174,12 @@ export class StreamProducerImpl implements StreamProducer {
       }),
     );
 
+    await this.incrementMetrics(service, { pending: 1 });
+
     if (opts?.idempotencyKey) {
-      await this.redis.set(keys(this.prefix).idempotency(opts.idempotencyKey), invocationId);
+      const idempotencyKey = keys(this.prefix).idempotency(opts.idempotencyKey);
+      await this.redis.set(idempotencyKey, invocationId);
+      await this.redis.pexpire(idempotencyKey, this.idempotencyTtlMs);
     }
 
     if (opts?.delay) {
@@ -214,11 +245,7 @@ export class StreamConsumerImpl implements StreamConsumer {
   }
 }
 
-function flattenFields(fields: Record<string, string>): string[] {
-  return Object.entries(fields).flatMap(([key, value]) => [key, value]);
-}
-
-function parseStreamMessage(messageId: string, fields: string[]): StreamMessage {
+export function parseStreamMessage(messageId: string, fields: string[]): StreamMessage {
   const parsed: Record<string, string> = {};
   for (let index = 0; index < fields.length; index += 2) {
     const key = fields[index];

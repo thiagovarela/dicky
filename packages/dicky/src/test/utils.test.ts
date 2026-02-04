@@ -37,6 +37,7 @@ describe("keys", () => {
     expect(prefixed.awakeable("awake1")).toBe("dicky:awakeable:awake1");
     expect(prefixed.dlq("orders")).toBe("dicky:dlq:orders");
     expect(prefixed.completion("inv1")).toBe("dicky:completion:inv1");
+    expect(prefixed.completionQueue("inv1")).toBe("dicky:completion-queue:inv1");
     expect(prefixed.idempotency("key1")).toBe("dicky:idempotent:key1");
     expect(prefixed.metrics("orders")).toBe("dicky:metrics:orders");
   });

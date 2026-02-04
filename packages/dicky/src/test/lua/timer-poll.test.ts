@@ -2,13 +2,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
 import { LuaScriptsImpl } from "../../lua";
-import { clearRedis, redisUrl, startRedis, stopRedis } from "../integration/setup";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
+import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
 
 (integrationEnabled ? describe : describe.skip)("Lua: timer-poll", () => {
   const prefix = "test:lua:timer:";
-  let redis: RedisClient;
+  let redis: RedisClient | null = null;
   let scripts: LuaScriptsImpl;
 
   beforeAll(async () => {
@@ -23,7 +21,9 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
   });
 
   afterAll(async () => {
-    await redis.quit();
+    if (redis) {
+      await redis.quit();
+    }
     await stopRedis();
   });
 

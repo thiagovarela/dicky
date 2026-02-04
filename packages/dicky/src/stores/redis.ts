@@ -27,6 +27,8 @@ export interface RedisClient {
   hget(key: string, field: string): Promise<string | null>;
   hset(key: string, field: string, value: string): Promise<number>;
   hsetnx(key: string, field: string, value: string): Promise<number>;
+  hincrby(key: string, field: string, value: number): Promise<number>;
+  hdel(key: string, ...fields: string[]): Promise<number>;
   hmset(key: string, ...pairs: string[]): Promise<void>;
   hgetall(key: string): Promise<Record<string, string>>;
   hlen(key: string): Promise<number>;
@@ -37,6 +39,10 @@ export interface RedisClient {
   pexpire(key: string, ttlMs: number): Promise<number>;
   get(key: string): Promise<string | null>;
   del(key: string | string[]): Promise<number>;
+
+  // List operations
+  rpush(key: string, ...values: string[]): Promise<number>;
+  blpop(key: string, timeoutSeconds: number): Promise<[string, string] | null>;
 
   // Sorted set operations
   zadd(key: string, score: string, member: string): Promise<number>;
@@ -93,12 +99,14 @@ interface StreamData {
 
 type RedisValue =
   | { type: "string"; value: string; expiresAt?: number }
-  | { type: "hash"; value: Map<string, string> }
-  | { type: "zset"; value: Map<string, number> }
-  | { type: "stream"; value: StreamData };
+  | { type: "hash"; value: Map<string, string>; expiresAt?: number }
+  | { type: "zset"; value: Map<string, number>; expiresAt?: number }
+  | { type: "stream"; value: StreamData; expiresAt?: number }
+  | { type: "list"; value: string[]; expiresAt?: number };
 
 export class MockRedisClient implements RedisClient {
   private store = new Map<string, RedisValue>();
+  private listWaiters = new Map<string, Array<(value: string) => void>>();
   private delayMs: number;
   private errorInjector: ((command: string, args: unknown[]) => Error | null) | null;
 
@@ -304,6 +312,32 @@ export class MockRedisClient implements RedisClient {
     });
   }
 
+  async hincrby(key: string, field: string, value: number): Promise<number> {
+    return this.run("hincrby", [key, field, value], () => {
+      const hash = this.getOrCreateHash(key);
+      const current = Number.parseInt(hash.get(field) ?? "0", 10);
+      const next = current + value;
+      hash.set(field, String(next));
+      return next;
+    });
+  }
+
+  async hdel(key: string, ...fields: string[]): Promise<number> {
+    return this.run("hdel", [key, ...fields], () => {
+      const hash = this.getHash(key);
+      if (!hash) {
+        return 0;
+      }
+      let removed = 0;
+      for (const field of fields) {
+        if (hash.delete(field)) {
+          removed += 1;
+        }
+      }
+      return removed;
+    });
+  }
+
   async hmset(key: string, ...pairs: string[]): Promise<void> {
     return this.run("hmset", [key, ...pairs], () => {
       const hash = this.getOrCreateHash(key);
@@ -343,7 +377,7 @@ export class MockRedisClient implements RedisClient {
 
   async setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean> {
     return this.run("setIfNotExists", [key, value, ttlMs], () => {
-      const existing = this.getStringValue(key);
+      const existing = this.getEntry(key);
       if (existing) {
         return false;
       }
@@ -354,8 +388,8 @@ export class MockRedisClient implements RedisClient {
 
   async pexpire(key: string, ttlMs: number): Promise<number> {
     return this.run("pexpire", [key, ttlMs], () => {
-      const entry = this.store.get(key);
-      if (!entry || entry.type !== "string") {
+      const entry = this.getEntry(key);
+      if (!entry) {
         return 0;
       }
       entry.expiresAt = Date.now() + ttlMs;
@@ -380,6 +414,77 @@ export class MockRedisClient implements RedisClient {
         }
       }
       return removed;
+    });
+  }
+
+  async rpush(key: string, ...values: string[]): Promise<number> {
+    return this.run("rpush", [key, ...values], () => {
+      let list = this.getList(key);
+      if (!list) {
+        list = this.getOrCreateList(key);
+      }
+
+      for (const value of values) {
+        const waiters = this.listWaiters.get(key);
+        const waiter = waiters?.shift();
+        if (waiter) {
+          waiter(value);
+          if (waiters && waiters.length === 0) {
+            this.listWaiters.delete(key);
+          }
+          continue;
+        }
+        list.push(value);
+      }
+
+      return list.length;
+    });
+  }
+
+  async blpop(key: string, timeoutSeconds: number): Promise<[string, string] | null> {
+    return this.run("blpop", [key, timeoutSeconds], async () => {
+      const list = this.getList(key);
+      if (list && list.length > 0) {
+        const value = list.shift();
+        return value != null ? [key, value] : null;
+      }
+
+      if (timeoutSeconds <= 0) {
+        return null;
+      }
+
+      return new Promise<[string, string] | null>((resolve) => {
+        let settled = false;
+        const waiters = this.listWaiters.get(key) ?? [];
+        const waiter = (value: string) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          resolve([key, value]);
+        };
+        waiters.push(waiter);
+        this.listWaiters.set(key, waiters);
+
+        const timer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          const current = this.listWaiters.get(key);
+          if (current) {
+            const index = current.indexOf(waiter);
+            if (index >= 0) {
+              current.splice(index, 1);
+            }
+            if (current.length === 0) {
+              this.listWaiters.delete(key);
+            }
+          }
+          resolve(null);
+        }, timeoutSeconds * 1000);
+      });
     });
   }
 
@@ -498,8 +603,20 @@ export class MockRedisClient implements RedisClient {
     return this.run("quit", [], () => undefined);
   }
 
-  private getStream(key: string): StreamData | undefined {
+  private getEntry(key: string): RedisValue | undefined {
     const entry = this.store.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAt != null && entry.expiresAt <= Date.now()) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  private getStream(key: string): StreamData | undefined {
+    const entry = this.getEntry(key);
     if (entry && entry.type === "stream") {
       return entry.value;
     }
@@ -509,12 +626,8 @@ export class MockRedisClient implements RedisClient {
   private getStringValue(
     key: string,
   ): { type: "string"; value: string; expiresAt?: number } | undefined {
-    const entry = this.store.get(key);
+    const entry = this.getEntry(key);
     if (!entry || entry.type !== "string") {
-      return undefined;
-    }
-    if (entry.expiresAt != null && entry.expiresAt <= Date.now()) {
-      this.store.delete(key);
       return undefined;
     }
     return entry;
@@ -582,7 +695,7 @@ export class MockRedisClient implements RedisClient {
   }
 
   private getHash(key: string): Map<string, string> | undefined {
-    const entry = this.store.get(key);
+    const entry = this.getEntry(key);
     if (entry && entry.type === "hash") {
       return entry.value;
     }
@@ -600,7 +713,7 @@ export class MockRedisClient implements RedisClient {
   }
 
   private getZSet(key: string): Map<string, number> | undefined {
-    const entry = this.store.get(key);
+    const entry = this.getEntry(key);
     if (entry && entry.type === "zset") {
       return entry.value;
     }
@@ -615,6 +728,24 @@ export class MockRedisClient implements RedisClient {
     const zset = new Map<string, number>();
     this.store.set(key, { type: "zset", value: zset });
     return zset;
+  }
+
+  private getList(key: string): string[] | undefined {
+    const entry = this.getEntry(key);
+    if (entry && entry.type === "list") {
+      return entry.value;
+    }
+    return undefined;
+  }
+
+  private getOrCreateList(key: string): string[] {
+    const existing = this.getList(key);
+    if (existing) {
+      return existing;
+    }
+    const list: string[] = [];
+    this.store.set(key, { type: "list", value: list });
+    return list;
   }
 
   private nextStreamId(stream: StreamData): string {
@@ -669,7 +800,7 @@ export class MockRedisClient implements RedisClient {
       }
     }
     if (this.delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs + 1));
     }
     return fn();
   }
@@ -723,7 +854,9 @@ export class IoredisClient implements RedisClient {
     if (!action) {
       return;
     }
-    const xgroup = this.redis.xgroup as unknown as (...values: string[]) => Promise<unknown>;
+    const xgroup = this.redis.xgroup.bind(this.redis) as unknown as (
+      ...values: string[]
+    ) => Promise<unknown>;
     await xgroup(action, key, ...rest);
   }
 
@@ -757,6 +890,14 @@ export class IoredisClient implements RedisClient {
 
   async hsetnx(key: string, field: string, value: string): Promise<number> {
     return this.redis.hsetnx(key, field, value);
+  }
+
+  async hincrby(key: string, field: string, value: number): Promise<number> {
+    return this.redis.hincrby(key, field, value);
+  }
+
+  async hdel(key: string, ...fields: string[]): Promise<number> {
+    return this.redis.hdel(key, ...fields);
   }
 
   async hmset(key: string, ...pairs: string[]): Promise<void> {
@@ -798,6 +939,19 @@ export class IoredisClient implements RedisClient {
     return this.redis.del(key);
   }
 
+  async rpush(key: string, ...values: string[]): Promise<number> {
+    return this.redis.rpush(key, ...values);
+  }
+
+  async blpop(key: string, timeoutSeconds: number): Promise<[string, string] | null> {
+    const result = await this.redis.blpop(key, timeoutSeconds);
+    if (!result) {
+      return null;
+    }
+    const [listKey, value] = result as [string, string];
+    return [listKey, value];
+  }
+
   async zadd(key: string, score: string, member: string): Promise<number> {
     return this.redis.zadd(key, score, member);
   }
@@ -821,7 +975,7 @@ export class IoredisClient implements RedisClient {
       args.push(limit, offset, count);
     }
 
-    const zrange = this.redis.zrangebyscore as unknown as (
+    const zrange = this.redis.zrangebyscore.bind(this.redis) as unknown as (
       ...values: Array<string | number>
     ) => Promise<string[]>;
     return zrange(...args);
@@ -841,7 +995,7 @@ export class IoredisClient implements RedisClient {
   }
 
   async evalsha(sha: string, numKeys: string, ...args: string[]): Promise<unknown> {
-    const evalsha = this.redis.evalsha as unknown as (
+    const evalsha = this.redis.evalsha.bind(this.redis) as unknown as (
       sha: string,
       numKeys: number,
       ...values: Array<string | number>

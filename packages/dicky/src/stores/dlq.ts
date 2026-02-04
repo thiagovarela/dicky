@@ -1,4 +1,4 @@
-import { keys } from "../utils";
+import { flattenFields, keys } from "../utils";
 import type { DLQEntry, Invocation, InvocationId } from "../types";
 import type { RedisClient } from "./redis";
 
@@ -82,12 +82,22 @@ export class DLQStoreImpl implements DLQStore {
       }),
     );
 
-    await this.redis.hset(invKey, "status", "pending");
-    await this.redis.hset(invKey, "updatedAt", String(Date.now()));
+    await this.redis.hmset(
+      invKey,
+      "status",
+      "pending",
+      "updatedAt",
+      String(Date.now()),
+    );
+    await this.redis.hdel(invKey, "error", "completedAt", "result");
 
     const dlqKey = keys(this.prefix).dlq(invocation.service);
     await this.redis.zrem(dlqKey, id);
     await this.redis.del(this.entryKey(invocation.service, id));
+    await this.redis.del([
+      keys(this.prefix).completion(id),
+      keys(this.prefix).completionQueue(id),
+    ]);
   }
 
   async clear(service: string): Promise<void> {
@@ -100,8 +110,4 @@ export class DLQStoreImpl implements DLQStore {
   private entryKey(service: string, id: string): string {
     return `${keys(this.prefix).dlq(service)}:entry:${id}`;
   }
-}
-
-function flattenFields(fields: Record<string, string>): string[] {
-  return Object.entries(fields).flatMap(([key, value]) => [key, value]);
 }

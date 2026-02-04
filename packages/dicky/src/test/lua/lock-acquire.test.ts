@@ -1,13 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createRedisClient, IoredisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
-import { clearRedis, redisUrl, startRedis, stopRedis } from "../integration/setup";
-
-const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
+import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
 
 (integrationEnabled ? describe : describe.skip)("Native: lock-acquire", () => {
   const prefix = "test:lua:lock:";
-  let redis: RedisClient;
+  let redis: RedisClient | null = null;
 
   beforeAll(async () => {
     await startRedis();
@@ -19,7 +17,9 @@ const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
   });
 
   afterAll(async () => {
-    await redis.quit();
+    if (redis) {
+      await redis.quit();
+    }
     await stopRedis();
   });
 

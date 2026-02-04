@@ -1,5 +1,5 @@
 import { AwakeableError } from "../errors";
-import { keys } from "../utils";
+import { flattenFields, keys } from "../utils";
 import type { JournalEntry } from "../types";
 import type { RedisClient } from "./redis";
 import type { JournalStore } from "./journal";
@@ -86,8 +86,4 @@ export class AwakeableStoreImpl implements AwakeableStore {
 
     await this.streamProducer.reenqueue(entry.invocationId);
   }
-}
-
-function flattenFields(fields: Record<string, string>): string[] {
-  return Object.entries(fields).flatMap(([key, value]) => [key, value]);
 }

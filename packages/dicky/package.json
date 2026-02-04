@@ -22,6 +22,7 @@
   "dependencies": {
     "bun": "^1.0.0",
     "@typescript/native-preview": "latest",
+    "ioredis": "^5.5.0",
     "nanoid": "^5.0.0"
   },
   "devDependencies": {

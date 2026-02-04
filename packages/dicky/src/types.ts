@@ -162,6 +162,17 @@ export interface DQConfig {
   log?: LogConfig;
 }
 
+export interface DLQEntry {
+  invocationId: InvocationId;
+  service: string;
+  handler: string;
+  args: unknown;
+  error: string;
+  attempt: number;
+  failedAt: number;
+  streamMessageId: string;
+}
+
 // Type inference utilities
 export type Handler = (ctx: DurableContext, args: any) => Promise<any>;
 export type ArgsOf<H> = H extends (ctx: any, args: infer A) => any ? A : never;

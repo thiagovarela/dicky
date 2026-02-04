@@ -1,0 +1,32 @@
+{
+  "name": "@dicky/dicky",
+  "version": "1.0.0",
+  "description": "The dicky package",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "bun --hot --watch",
+    "build": "bun run build-ts && bun run bundle",
+    "build-ts": "tsc",
+    "typecheck": "tsgo --noEmit",
+    "bundle": "bun bundle dist/index.js -o dist/bundle.js",
+    "test": "bun test",
+    "lint": "oxlint src",
+    "lint:fix": "oxlint src --fix",
+    "format": "oxfmt src",
+    "format:check": "oxfmt src --check",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "bun": "^1.0.0",
+    "@typescript/native-preview": "latest",
+    "nanoid": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "bun-types": "^1.3.8",
+    "oxlint": "latest",
+    "oxfmt": "latest",
+    "typescript": "^5.0.0"
+  }
+}

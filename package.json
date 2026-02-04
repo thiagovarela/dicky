@@ -1,0 +1,25 @@
+{
+  "name": "dicky-monorepo",
+  "version": "1.0.0",
+  "description": "A monorepo for dicky packages",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter @dicky/dicky dev",
+    "build": "bun run --filter @dicky/dicky build",
+    "typecheck": "bun run --filter @dicky/dicky typecheck",
+    "test": "bun run --filter @dicky/dicky test",
+    "lint": "bun run --filter @dicky/dicky lint",
+    "lint:fix": "bun run --filter @dicky/dicky lint:fix",
+    "format": "bun run --filter @dicky/dicky format",
+    "format:check": "bun run --filter @dicky/dicky format:check"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "oxlint": "latest",
+    "oxfmt": "latest",
+    "typescript": "^5.0.0"
+  }
+}

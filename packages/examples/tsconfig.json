@@ -4,6 +4,6 @@
     "noEmit": true,
     "types": ["bun-types"]
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "../../test/**/*.ts"],
   "references": [{ "path": "../dicky" }]
 }

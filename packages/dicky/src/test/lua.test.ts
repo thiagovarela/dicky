@@ -26,8 +26,13 @@ import { integrationEnabled, setupTestRedis, teardownTestRedis } from "./setup";
   });
 
   it("loads scripts and caches SHAs", () => {
-    expect(scripts.list()).toHaveLength(3);
+    const loaded = scripts.list();
+    expect(loaded.length).toBeGreaterThanOrEqual(5);
+    expect(loaded).toContain("timer-poll");
+    expect(loaded).toContain("journal-write");
+    expect(loaded).toContain("lock-acquire");
     expect(scripts.getSha("timer-poll")).toBeTruthy();
+    expect(scripts.getSha("journal-write")).toBeTruthy();
   });
 
   it("handles NOSCRIPT by reloading", async () => {

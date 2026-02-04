@@ -1,15 +1,25 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
-import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
+import { LuaScriptsImpl } from "../../lua";
+import {
+  clearRedis,
+  integrationEnabled,
+  redisUrl,
+  startRedis,
+  stopRedis,
+} from "../integration/setup";
 
-(integrationEnabled ? describe : describe.skip)("Native: journal-write", () => {
+(integrationEnabled ? describe : describe.skip)("Lua: journal-write", () => {
   const prefix = "test:lua:journal:";
   let redis: RedisClient | null = null;
+  let scripts: LuaScriptsImpl;
 
   beforeAll(async () => {
     await startRedis();
     redis = await createRedisClient({ url: redisUrl });
+    scripts = new LuaScriptsImpl();
+    await scripts.load(redis);
   });
 
   beforeEach(async () => {
@@ -27,7 +37,12 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     const journalKey = `${prefix}inv-123`;
     const entry = { invocationId: "inv-123", sequence: 0, type: "run", status: "pending" };
 
-    const result = await redis.hsetnx(journalKey, "0", JSON.stringify(entry));
+    const result = await scripts.eval(
+      redis,
+      "journal-write",
+      [journalKey],
+      ["0", JSON.stringify(entry)],
+    );
     expect(result).toBe(1);
 
     const stored = await redis.hget(journalKey, "0");
@@ -38,8 +53,13 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     const journalKey = `${prefix}inv-123`;
     const entry = { invocationId: "inv-123", sequence: 0, type: "run", status: "pending" };
 
-    await redis.hsetnx(journalKey, "0", JSON.stringify(entry));
-    const result = await redis.hsetnx(journalKey, "0", JSON.stringify(entry));
+    await scripts.eval(redis, "journal-write", [journalKey], ["0", JSON.stringify(entry)]);
+    const result = await scripts.eval(
+      redis,
+      "journal-write",
+      [journalKey],
+      ["0", JSON.stringify(entry)],
+    );
 
     expect(result).toBe(0);
   });
@@ -47,9 +67,9 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
   it("allows different sequences", async () => {
     const journalKey = `${prefix}inv-123`;
 
-    await redis.hsetnx(journalKey, "0", JSON.stringify({ seq: 0 }));
-    await redis.hsetnx(journalKey, "1", JSON.stringify({ seq: 1 }));
-    await redis.hsetnx(journalKey, "2", JSON.stringify({ seq: 2 }));
+    await scripts.eval(redis, "journal-write", [journalKey], ["0", JSON.stringify({ seq: 0 })]);
+    await scripts.eval(redis, "journal-write", [journalKey], ["1", JSON.stringify({ seq: 1 })]);
+    await scripts.eval(redis, "journal-write", [journalKey], ["2", JSON.stringify({ seq: 2 })]);
 
     const count = await redis.hlen(journalKey);
     expect(count).toBe(3);
@@ -60,7 +80,9 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     const entry = { invocationId: "inv-concurrent", sequence: 0, type: "run" };
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, () => redis.hsetnx(journalKey, "0", JSON.stringify(entry))),
+      Array.from({ length: 10 }, () =>
+        scripts.eval(redis, "journal-write", [journalKey], ["0", JSON.stringify(entry)]),
+      ),
     );
 
     const successCount = results.filter((value) => value === 1).length;

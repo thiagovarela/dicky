@@ -2,7 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
 import { LuaScriptsImpl } from "../../lua";
-import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
+import {
+  clearRedis,
+  integrationEnabled,
+  redisUrl,
+  startRedis,
+  stopRedis,
+} from "../integration/setup";
 
 (integrationEnabled ? describe : describe.skip)("Lua Scripts: Atomicity", () => {
   const prefix = "test:lua:atomic:";
@@ -27,11 +33,31 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     await stopRedis();
   });
 
+  it("journal-write is atomic under concurrent access", async () => {
+    const journalKey = `${prefix}journal`;
+    const entry = { invocationId: "atomic", sequence: 0, type: "run" };
+
+    const results = await Promise.all(
+      Array.from({ length: 100 }, () =>
+        scripts.eval(redis, "journal-write", [journalKey], ["0", JSON.stringify(entry)]),
+      ),
+    );
+
+    const successes = results.filter((value) => value === 1).length;
+    const failures = results.filter((value) => value === 0).length;
+
+    expect(successes).toBe(1);
+    expect(failures).toBe(99);
+
+    const count = await redis.hlen(journalKey);
+    expect(count).toBe(1);
+  });
+
   it("timer-poll removes exactly matching entries", async () => {
     const timerKey = `${prefix}timers`;
     const now = Date.now();
 
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < 50; i += 1) {
       await redis.zadd(timerKey, String(now - 1000), JSON.stringify({ invocationId: `inv-${i}` }));
     }
 
@@ -39,25 +65,30 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
       redis,
       "timer-poll",
       [timerKey],
-      [String(now), "5"],
+      [String(now), "10"],
     )) as string[];
 
-    expect(polled).toHaveLength(5);
+    expect(polled).toHaveLength(10);
 
     const remaining = await redis.zrangebyscore(timerKey, "-inf", "+inf");
-    expect(remaining).toHaveLength(15);
+    expect(remaining).toHaveLength(40);
   });
 
-  it("lock-release respects ownership", async () => {
+  it("lock acquisition/release with concurrent access", async () => {
     const lockKey = `${prefix}lock`;
-    await redis.set(lockKey, "owner");
+    const tokens = Array.from({ length: 10 }, (_, index) => `token-${index}`);
 
-    const results = await Promise.all([
-      scripts.eval(redis, "lock-release", [lockKey], ["owner"]),
-      scripts.eval(redis, "lock-release", [lockKey], ["other"]),
-    ]);
+    const acquireResults = await Promise.all(
+      tokens.map((token) => scripts.eval(redis, "lock-acquire", [lockKey], [token, "30000"])),
+    );
 
-    const successes = results.filter((value) => value === 1).length;
+    const successes = acquireResults.filter((value) => value === 1).length;
     expect(successes).toBe(1);
+
+    const ownerToken = tokens[acquireResults.findIndex((value) => value === 1)];
+    await scripts.eval(redis, "lock-release", [lockKey], [ownerToken]);
+
+    const newAcquire = await scripts.eval(redis, "lock-acquire", [lockKey], ["new-token", "30000"]);
+    expect(newAcquire).toBe(1);
   });
 });

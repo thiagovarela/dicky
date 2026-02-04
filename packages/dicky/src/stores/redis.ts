@@ -591,6 +591,14 @@ export class MockRedisClient implements RedisClient {
         return this.evalLockRelease(keys[0], argv[0]);
       }
 
+      if (content.includes("HSETNX")) {
+        return this.evalJournalWrite(keys[0], argv[0], argv[1]);
+      }
+
+      if (content.includes("NX") && content.includes("PX") && content.includes("SET")) {
+        return this.evalLockAcquire(keys[0], argv[0], argv[1]);
+      }
+
       return script.value;
     });
   }
@@ -677,6 +685,34 @@ export class MockRedisClient implements RedisClient {
       return 0;
     }
     this.store.delete(key);
+    return 1;
+  }
+
+  private evalJournalWrite(key?: string, sequence?: string, entry?: string): number {
+    if (!key || !sequence || entry == null) {
+      return 0;
+    }
+    const hash = this.getOrCreateHash(key);
+    if (hash.has(sequence)) {
+      return 0;
+    }
+    hash.set(sequence, entry);
+    return 1;
+  }
+
+  private evalLockAcquire(key?: string, token?: string, ttlMs?: string): number {
+    if (!key || !token || !ttlMs) {
+      return 0;
+    }
+    const existing = this.getEntry(key);
+    if (existing) {
+      return 0;
+    }
+    this.store.set(key, {
+      type: "string",
+      value: token,
+      expiresAt: Date.now() + Number.parseInt(ttlMs, 10),
+    });
     return 1;
   }
 

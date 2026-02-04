@@ -1,8 +1,9 @@
-import { describe, it } from "bun:test";
+import { afterAll, beforeAll, describe, it } from "bun:test";
 import { readdirSync } from "node:fs";
 import { basename } from "node:path";
 import type { Dicky, DickyConfig } from "@dicky/dicky";
 import { withCleanup } from "../src/setup";
+import { startRedis, stopRedis } from "../../../test/redis";
 
 type ExampleModule = {
   dicky: Dicky;
@@ -16,6 +17,14 @@ const files = readdirSync(examplesDir).filter(
 );
 
 describe("examples", () => {
+  beforeAll(async () => {
+    await startRedis();
+  });
+
+  afterAll(async () => {
+    await stopRedis();
+  });
+
   for (const file of files) {
     const name = basename(file, ".ts");
     it(name, async () => {

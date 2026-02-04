@@ -127,7 +127,7 @@ function createWorker(
       {
         kind,
         name: "svc",
-        handlers: { handler },
+        handlers: { handler: { handler } },
         ...(kind === "object" ? { initialState: { count: 0 } } : {}),
       },
     ],

@@ -2,7 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
 import { LuaScriptsImpl } from "../../lua";
-import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
+import {
+  clearRedis,
+  integrationEnabled,
+  redisUrl,
+  startRedis,
+  stopRedis,
+} from "../integration/setup";
 
 (integrationEnabled ? describe : describe.skip)("Lua: lock-release", () => {
   const prefix = "test:lua:lock-release:";
@@ -50,5 +56,12 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
 
     const holder = await redis.get(lockKey);
     expect(holder).toBe("other-token");
+  });
+
+  it("handles non-existent lock", async () => {
+    const lockKey = `${prefix}counter:user-nonexistent`;
+
+    const result = await scripts.eval(redis, "lock-release", [lockKey], ["token"]);
+    expect(result).toBe(0);
   });
 });

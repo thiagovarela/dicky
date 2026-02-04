@@ -2,7 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { createRedisClient } from "../../stores/redis";
 import type { RedisClient } from "../../stores/redis";
 import { LuaScriptsImpl } from "../../lua";
-import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from "../integration/setup";
+import {
+  clearRedis,
+  integrationEnabled,
+  redisUrl,
+  startRedis,
+  stopRedis,
+} from "../integration/setup";
 
 (integrationEnabled ? describe : describe.skip)("Lua: timer-poll", () => {
   const prefix = "test:lua:timer:";
@@ -42,6 +48,7 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     )) as string[];
 
     expect(expired).toHaveLength(1);
+    expect(JSON.parse(expired[0] ?? "{}")).toEqual({ invocationId: "inv-1" });
   });
 
   it("removes expired timers", async () => {
@@ -73,5 +80,19 @@ import { clearRedis, integrationEnabled, redisUrl, startRedis, stopRedis } from 
     )) as string[];
 
     expect(expired).toHaveLength(5);
+  });
+
+  it("handles empty result set", async () => {
+    const timerKey = `${prefix}timers`;
+    const now = Date.now();
+
+    const expired = (await scripts.eval(
+      redis,
+      "timer-poll",
+      [timerKey],
+      [String(now), "10"],
+    )) as string[];
+
+    expect(expired).toHaveLength(0);
   });
 });

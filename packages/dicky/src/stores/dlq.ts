@@ -1,6 +1,6 @@
-import { keys } from "../utils.js";
-import type { DLQEntry, Invocation, InvocationId } from "../types.js";
-import type { RedisClient } from "./redis.js";
+import { keys } from "../utils";
+import type { DLQEntry, Invocation, InvocationId } from "../types";
+import type { RedisClient } from "./redis";
 
 export interface DLQStore {
   push(invocation: Invocation, error: string): Promise<void>;

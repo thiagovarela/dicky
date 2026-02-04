@@ -1,16 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { JournalStoreImpl } from "../../stores/journal.js";
-import { MockRedisClient } from "../../stores/redis.js";
-import type { JournalEntry } from "../../types.js";
-import { MockLuaScripts } from "./helpers.js";
-
+import { JournalStoreImpl } from "../../stores/journal";
+import { MockRedisClient } from "../../stores/redis";
+import type { JournalEntry } from "../../types";
 const prefix = "test:journal:";
 
 describe("JournalStore", () => {
   it("writes once and rejects duplicates", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const store = new JournalStoreImpl(redis, prefix, scripts);
+    const store = new JournalStoreImpl(redis, prefix);
 
     const entry: JournalEntry = {
       invocationId: "inv_1",
@@ -28,8 +25,7 @@ describe("JournalStore", () => {
 
   it("completes pending entries", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const store = new JournalStoreImpl(redis, prefix, scripts);
+    const store = new JournalStoreImpl(redis, prefix);
 
     const entry: JournalEntry = {
       invocationId: "inv_2",
@@ -50,8 +46,7 @@ describe("JournalStore", () => {
 
   it("returns entries ordered by sequence", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const store = new JournalStoreImpl(redis, prefix, scripts);
+    const store = new JournalStoreImpl(redis, prefix);
 
     await store.write({
       invocationId: "inv_3",

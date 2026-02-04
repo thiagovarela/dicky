@@ -1,9 +1,9 @@
-import { AwakeableError } from "../errors.js";
-import { keys } from "../utils.js";
-import type { JournalEntry } from "../types.js";
-import type { RedisClient } from "./redis.js";
-import type { JournalStore } from "./journal.js";
-import type { StreamProducer } from "./stream.js";
+import { AwakeableError } from "../errors";
+import { keys } from "../utils";
+import type { JournalEntry } from "../types";
+import type { RedisClient } from "./redis";
+import type { JournalStore } from "./journal";
+import type { StreamProducer } from "./stream";
 
 export interface AwakeableEntry {
   invocationId: string;

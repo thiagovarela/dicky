@@ -1,4 +1,4 @@
-import type { InvocationId } from "./types.js";
+import type { InvocationId } from "./types";
 
 export interface SerializedError {
   name: string;

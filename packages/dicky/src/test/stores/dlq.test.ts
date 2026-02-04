@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { DLQStoreImpl } from "../../stores/dlq.js";
-import { MockRedisClient } from "../../stores/redis.js";
-import type { Invocation } from "../../types.js";
+import { DLQStoreImpl } from "../../stores/dlq";
+import { MockRedisClient } from "../../stores/redis";
+import type { Invocation } from "../../types";
 
 const prefix = "test:dlq:";
 

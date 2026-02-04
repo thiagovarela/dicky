@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { StateStoreImpl } from "../../stores/state.js";
-import { MockRedisClient } from "../../stores/redis.js";
+import { StateStoreImpl } from "../../stores/state";
+import { MockRedisClient } from "../../stores/redis";
 
 const prefix = "test:state:";
 

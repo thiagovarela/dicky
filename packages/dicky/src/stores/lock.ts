@@ -1,7 +1,7 @@
-import { LockConflictError } from "../errors.js";
-import { keys, newLockToken } from "../utils.js";
-import type { RedisClient } from "./redis.js";
-import type { LuaScripts } from "./scripts.js";
+import { LockConflictError } from "../errors";
+import { keys, newLockToken } from "../utils";
+import type { RedisClient } from "./redis";
+import type { LuaScripts } from "./scripts";
 
 export interface LockGuard {
   readonly objectName: string;
@@ -27,14 +27,9 @@ export class LockManagerImpl implements LockManager {
     const lockKey = keys(this.prefix).lock(objectName, key);
     const token = newLockToken();
 
-    const acquired = await this.scripts.eval(
-      this.redis,
-      "lock-acquire",
-      [lockKey],
-      [token, String(this.ttlMs)],
-    );
+    const acquired = await this.redis.setIfNotExists(lockKey, token, this.ttlMs);
 
-    if (normalizeLuaResult(acquired) !== 1) {
+    if (!acquired) {
       throw new LockConflictError(objectName, key);
     }
 
@@ -82,18 +77,4 @@ class LockGuardImpl implements LockGuard {
       this.renewTimer = null;
     }
   }
-}
-
-function normalizeLuaResult(result: unknown): number {
-  if (typeof result === "number") {
-    return result;
-  }
-  if (typeof result === "string") {
-    const parsed = Number.parseInt(result, 10);
-    return Number.isNaN(parsed) ? 0 : parsed;
-  }
-  if (typeof result === "boolean") {
-    return result ? 1 : 0;
-  }
-  return 0;
 }

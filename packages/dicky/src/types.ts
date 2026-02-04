@@ -1,3 +1,5 @@
+import type { RedisClient, RedisDriver } from "./stores/redis";
+
 export type InvocationId = string;
 
 // Service/Object definitions
@@ -133,6 +135,10 @@ export interface RedisConfig {
   db?: number;
   keyPrefix?: string;
   tls?: boolean;
+  url?: string;
+  driver?: RedisDriver;
+  client?: RedisClient;
+  factory?: (url: string) => Promise<RedisClient>;
 }
 
 export interface WorkerConfig {
@@ -160,6 +166,31 @@ export interface DickyConfig {
   worker?: WorkerConfig;
   retry?: RetryConfig;
   log?: LogConfig;
+}
+
+export interface ResolvedConfig {
+  redis: RedisConfig & { keyPrefix: string; url: string };
+  worker: Required<WorkerConfig>;
+  retry: Required<RetryConfig>;
+  log?: LogConfig;
+}
+
+export interface RegisteredService {
+  kind: "service" | "object";
+  name: string;
+  handlers: Record<string, Handler>;
+  initialState?: unknown;
+}
+
+export interface Metrics {
+  service: string;
+  completed: number;
+  failed: number;
+  replayed: number;
+  totalSteps: number;
+  avgDurationMs: number;
+  pending: number;
+  active: number;
 }
 
 export interface DLQEntry {

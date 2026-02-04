@@ -8,7 +8,7 @@ import {
   TimeoutError,
   deserializeError,
   serializeError,
-} from "../errors.js";
+} from "../errors";
 
 describe("errors", () => {
   it("includes context in messages", () => {

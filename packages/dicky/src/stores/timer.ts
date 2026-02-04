@@ -1,6 +1,6 @@
-import { keys } from "../utils.js";
-import type { RedisClient } from "./redis.js";
-import type { LuaScripts } from "./scripts.js";
+import { keys } from "../utils";
+import type { RedisClient } from "./redis";
+import type { LuaScripts } from "./scripts";
 
 export interface TimerEntry {
   invocationId: string;

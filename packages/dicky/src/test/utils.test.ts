@@ -6,7 +6,7 @@ import {
   newLockToken,
   newWorkerId,
   parseDuration,
-} from "../utils.js";
+} from "../utils";
 
 describe("parseDuration", () => {
   it("parses supported durations", () => {

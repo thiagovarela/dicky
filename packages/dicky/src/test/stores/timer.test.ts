@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { MockRedisClient } from "../../stores/redis.js";
-import { TimerStoreImpl } from "../../stores/timer.js";
-import { MockLuaScripts } from "./helpers.js";
+import { MockRedisClient } from "../../stores/redis";
+import { TimerStoreImpl } from "../../stores/timer";
+import { MockLuaScripts } from "./helpers";
 
 const prefix = "test:timer:";
 

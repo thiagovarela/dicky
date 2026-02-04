@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { MockRedisClient } from "../../stores/redis.js";
-import { StreamConsumerImpl, StreamProducerImpl } from "../../stores/stream.js";
+import { MockRedisClient } from "../../stores/redis";
+import { StreamConsumerImpl, StreamProducerImpl } from "../../stores/stream";
 
 const prefix = "test:stream:";
 

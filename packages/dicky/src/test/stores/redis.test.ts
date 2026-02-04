@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { MockRedisClient, createRedisClient } from "../../stores/redis.js";
-import { setupTestRedis, teardownTestRedis } from "../setup.js";
+import { MockRedisClient, createRedisClient } from "../../stores/redis";
+import { setupTestRedis, teardownTestRedis } from "../setup";
 
 const integrationEnabled = process.env.DICKY_INTEGRATION === "1";
 

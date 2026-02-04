@@ -1,5 +1,5 @@
-import { createRedisClient, IoredisClient, MockRedisClient } from "../stores/redis.js";
-import type { RedisClient, RedisClientOptions } from "../stores/redis.js";
+import { createRedisClient, IoredisClient, MockRedisClient } from "../stores/redis";
+import type { RedisClient, RedisClientOptions } from "../stores/redis";
 
 export interface TestSetupOptions {
   prefix: string;

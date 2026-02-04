@@ -1,9 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { AwakeableStoreImpl } from "../../stores/awakeable.js";
-import { JournalStoreImpl } from "../../stores/journal.js";
-import { MockRedisClient } from "../../stores/redis.js";
-import type { JournalEntry } from "../../types.js";
-import { MockLuaScripts } from "./helpers.js";
+import { AwakeableStoreImpl } from "../../stores/awakeable";
+import { JournalStoreImpl } from "../../stores/journal";
+import { MockRedisClient } from "../../stores/redis";
+import type { JournalEntry } from "../../types";
 
 class TestStreamProducer {
   readonly reenqueued: string[] = [];
@@ -52,8 +51,7 @@ const prefix = "test:awakeable:";
 describe("AwakeableStore", () => {
   it("creates pending awakeables", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const journal = new JournalStoreImpl(redis, prefix, scripts);
+    const journal = new JournalStoreImpl(redis, prefix);
     const producer = new TestStreamProducer();
     const store = new AwakeableStoreImpl(redis, prefix, journal, producer);
 
@@ -65,8 +63,7 @@ describe("AwakeableStore", () => {
 
   it("resolves awakeables and completes journal", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const journal = new JournalStoreImpl(redis, prefix, scripts);
+    const journal = new JournalStoreImpl(redis, prefix);
     const producer = new TestStreamProducer();
     const store = new AwakeableStoreImpl(redis, prefix, journal, producer);
 
@@ -90,8 +87,7 @@ describe("AwakeableStore", () => {
 
   it("rejects awakeables", async () => {
     const redis = new MockRedisClient();
-    const scripts = new MockLuaScripts();
-    const journal = new JournalStoreImpl(redis, prefix, scripts);
+    const journal = new JournalStoreImpl(redis, prefix);
     const producer = new TestStreamProducer();
     const store = new AwakeableStoreImpl(redis, prefix, journal, producer);
 

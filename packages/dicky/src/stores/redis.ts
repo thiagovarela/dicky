@@ -26,12 +26,15 @@ export interface RedisClient {
   // Hash operations
   hget(key: string, field: string): Promise<string | null>;
   hset(key: string, field: string, value: string): Promise<number>;
+  hsetnx(key: string, field: string, value: string): Promise<number>;
   hmset(key: string, ...pairs: string[]): Promise<void>;
   hgetall(key: string): Promise<Record<string, string>>;
   hlen(key: string): Promise<number>;
 
   // Key operations
   set(key: string, value: string): Promise<void>;
+  setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean>;
+  pexpire(key: string, ttlMs: number): Promise<number>;
   get(key: string): Promise<string | null>;
   del(key: string | string[]): Promise<number>;
 
@@ -50,6 +53,7 @@ export interface RedisClient {
 
   // Script operations
   scriptLoad(script: string): Promise<string>;
+  scriptFlush(): Promise<void>;
   evalsha(sha: string, numKeys: string, ...args: string[]): Promise<unknown>;
 
   // Admin
@@ -88,7 +92,7 @@ interface StreamData {
 }
 
 type RedisValue =
-  | { type: "string"; value: string }
+  | { type: "string"; value: string; expiresAt?: number }
   | { type: "hash"; value: Map<string, string> }
   | { type: "zset"; value: Map<string, number> }
   | { type: "stream"; value: StreamData };
@@ -126,10 +130,10 @@ export class MockRedisClient implements RedisClient {
     group: string,
     consumer: string,
     count: string,
-    _block: string,
+    block: string,
     ...streams: string[]
   ): Promise<XReadGroupResult> {
-    return this.run("xreadgroup", [group, consumer, count, _block, ...streams], () => {
+    const result = await this.run("xreadgroup", [group, consumer, count, block, ...streams], () => {
       if (streams.length === 0) {
         return null;
       }
@@ -167,6 +171,15 @@ export class MockRedisClient implements RedisClient {
 
       return results.length > 0 ? results : null;
     });
+
+    if (!result) {
+      const blockMs = Number.parseInt(block, 10);
+      if (blockMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, blockMs));
+      }
+    }
+
+    return result;
   }
 
   async xack(key: string, group: string, ...ids: string[]): Promise<number> {
@@ -280,6 +293,17 @@ export class MockRedisClient implements RedisClient {
     });
   }
 
+  async hsetnx(key: string, field: string, value: string): Promise<number> {
+    return this.run("hsetnx", [key, field, value], () => {
+      const hash = this.getOrCreateHash(key);
+      if (hash.has(field)) {
+        return 0;
+      }
+      hash.set(field, value);
+      return 1;
+    });
+  }
+
   async hmset(key: string, ...pairs: string[]): Promise<void> {
     return this.run("hmset", [key, ...pairs], () => {
       const hash = this.getOrCreateHash(key);
@@ -317,13 +341,32 @@ export class MockRedisClient implements RedisClient {
     });
   }
 
-  async get(key: string): Promise<string | null> {
-    return this.run("get", [key], () => {
+  async setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean> {
+    return this.run("setIfNotExists", [key, value, ttlMs], () => {
+      const existing = this.getStringValue(key);
+      if (existing) {
+        return false;
+      }
+      this.store.set(key, { type: "string", value, expiresAt: Date.now() + ttlMs });
+      return true;
+    });
+  }
+
+  async pexpire(key: string, ttlMs: number): Promise<number> {
+    return this.run("pexpire", [key, ttlMs], () => {
       const entry = this.store.get(key);
       if (!entry || entry.type !== "string") {
-        return null;
+        return 0;
       }
-      return entry.value;
+      entry.expiresAt = Date.now() + ttlMs;
+      return 1;
+    });
+  }
+
+  async get(key: string): Promise<string | null> {
+    return this.run("get", [key], () => {
+      const entry = this.getStringValue(key);
+      return entry?.value ?? null;
     });
   }
 
@@ -409,12 +452,40 @@ export class MockRedisClient implements RedisClient {
     });
   }
 
-  async evalsha(sha: string, _numKeys: string, ...args: string[]): Promise<unknown> {
-    return this.run("evalsha", [sha, _numKeys, ...args], () => {
+  async scriptFlush(): Promise<void> {
+    return this.run("scriptFlush", [], () => {
+      for (const key of this.store.keys()) {
+        if (key.startsWith("script:")) {
+          this.store.delete(key);
+        }
+      }
+    });
+  }
+
+  async evalsha(sha: string, numKeys: string, ...args: string[]): Promise<unknown> {
+    return this.run("evalsha", [sha, numKeys, ...args], () => {
       const script = this.store.get(`script:${sha}`);
       if (!script || script.type !== "string") {
         throw new Error(`NOSCRIPT ${sha}`);
       }
+
+      const keyCount = Number.parseInt(numKeys, 10);
+      const keys = args.slice(0, keyCount);
+      const argv = args.slice(keyCount);
+      const content = script.value;
+
+      if (content.includes("ZRANGEBYSCORE") && content.includes("ZREM")) {
+        return this.evalTimerPoll(keys[0], argv[0], argv[1]);
+      }
+
+      if (content.includes("PEXPIRE")) {
+        return this.evalLockRenew(keys[0], argv[0], argv[1]);
+      }
+
+      if (content.includes("DEL") && content.includes("GET")) {
+        return this.evalLockRelease(keys[0], argv[0]);
+      }
+
       return script.value;
     });
   }
@@ -433,6 +504,67 @@ export class MockRedisClient implements RedisClient {
       return entry.value;
     }
     return undefined;
+  }
+
+  private getStringValue(
+    key: string,
+  ): { type: "string"; value: string; expiresAt?: number } | undefined {
+    const entry = this.store.get(key);
+    if (!entry || entry.type !== "string") {
+      return undefined;
+    }
+    if (entry.expiresAt != null && entry.expiresAt <= Date.now()) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  private evalTimerPoll(key?: string, now?: string, limit?: string): string[] {
+    if (!key) {
+      return [];
+    }
+    const zset = this.getZSet(key);
+    if (!zset) {
+      return [];
+    }
+
+    const max = Number.parseFloat(now ?? "0");
+    const count = Number.parseInt(limit ?? "0", 10);
+    const entries = [...zset.entries()]
+      .filter(([, score]) => score <= max)
+      .sort(([, a], [, b]) => a - b)
+      .slice(0, count);
+
+    const results = entries.map(([member]) => member);
+    for (const [member] of entries) {
+      zset.delete(member);
+    }
+    return results;
+  }
+
+  private evalLockRenew(key?: string, token?: string, ttlMs?: string): number {
+    if (!key || !token || !ttlMs) {
+      return 0;
+    }
+    const entry = this.getStringValue(key);
+    if (!entry || entry.value !== token) {
+      return 0;
+    }
+    entry.expiresAt = Date.now() + Number.parseInt(ttlMs, 10);
+    return 1;
+  }
+
+  private evalLockRelease(key?: string, token?: string): number {
+    if (!key || !token) {
+      return 0;
+    }
+    const entry = this.getStringValue(key);
+    if (!entry || entry.value !== token) {
+      return 0;
+    }
+    this.store.delete(key);
+    return 1;
   }
 
   private getOrCreateStream(key: string): StreamData {
@@ -623,6 +755,10 @@ export class IoredisClient implements RedisClient {
     return this.redis.hset(key, field, value);
   }
 
+  async hsetnx(key: string, field: string, value: string): Promise<number> {
+    return this.redis.hsetnx(key, field, value);
+  }
+
   async hmset(key: string, ...pairs: string[]): Promise<void> {
     if (pairs.length === 0) {
       return;
@@ -640,6 +776,15 @@ export class IoredisClient implements RedisClient {
 
   async set(key: string, value: string): Promise<void> {
     await this.redis.set(key, value);
+  }
+
+  async setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean> {
+    const result = await this.redis.set(key, value, "PX", ttlMs, "NX");
+    return result === "OK";
+  }
+
+  async pexpire(key: string, ttlMs: number): Promise<number> {
+    return this.redis.pexpire(key, ttlMs);
   }
 
   async get(key: string): Promise<string | null> {
@@ -689,6 +834,10 @@ export class IoredisClient implements RedisClient {
   async scriptLoad(script: string): Promise<string> {
     const result = await this.redis.script("LOAD", script);
     return result as string;
+  }
+
+  async scriptFlush(): Promise<void> {
+    await this.redis.script("FLUSH");
   }
 
   async evalsha(sha: string, numKeys: string, ...args: string[]): Promise<unknown> {

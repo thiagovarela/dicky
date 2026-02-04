@@ -492,7 +492,7 @@ export interface RegisteredService {
 These are pure data constructors. They don't touch Redis or register anything — they just return typed definitions that `.use()` consumes.
 
 ```typescript
-import type { DurableContext, ServiceDef, ObjectDef, Handler } from './types.js';
+import type { DurableContext, ServiceDef, ObjectDef, Handler } from './types;
 
 /**
  * Define a stateless service. Returns a typed definition
@@ -558,7 +558,7 @@ import type {
   Metrics,
   DLQEntry,
   RegisteredService,
-} from './types.js';
+} from './types;
 
 export class Dicky {
   private services = new Map();
@@ -844,13 +844,13 @@ export class JournalStore {
 The context maintains a **sequence counter** that increments with every journaled operation. On replay, it reads from the journal instead of executing.
 
 ```typescript
-import { SuspendedError } from './errors.js';
+import { SuspendedError } from './errors;
 import type {
   DurableContext,
   InvocationId,
   JournalEntry,
   JournalEntryType,
-} from './types.js';
+} from './types;
 
 export class DurableContextImpl<TState = unknown> implements DurableContext {
   private sequence = 0;
@@ -1938,7 +1938,7 @@ export class AwakeableError extends DickyError {
 
 ```typescript
 import { nanoid } from 'nanoid';
-import type { DickyConfig, ResolvedConfig } from './types.js';
+import type { DickyConfig, ResolvedConfig } from './types;
 
 // ─── ID generators ───
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { LockManagerImpl } from "../../stores/lock.js";
-import { MockRedisClient } from "../../stores/redis.js";
-import { MockLuaScripts } from "./helpers.js";
-import { LockConflictError } from "../../errors.js";
+import { LockManagerImpl } from "../../stores/lock";
+import { MockRedisClient } from "../../stores/redis";
+import { MockLuaScripts } from "./helpers";
+import { LockConflictError } from "../../errors";
 
 const prefix = "test:lock:";
 

@@ -1,6 +1,6 @@
-import { keys, newInvocationId, parseDuration } from "../utils.js";
-import type { RedisClient } from "./redis.js";
-import type { TimerEntry } from "./timer.js";
+import { keys, newInvocationId, parseDuration } from "../utils";
+import type { RedisClient } from "./redis";
+import type { TimerEntry } from "./timer";
 
 export interface StreamMessage {
   messageId: string;

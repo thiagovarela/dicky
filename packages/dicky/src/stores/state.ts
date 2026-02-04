@@ -1,5 +1,5 @@
-import { keys } from "../utils.js";
-import type { RedisClient } from "./redis.js";
+import { keys } from "../utils";
+import type { RedisClient } from "./redis";
 
 export interface StateStore {
   get(objectName: string, key: string): Promise<string | null>;

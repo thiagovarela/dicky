@@ -56,8 +56,7 @@ export function resolveConfig(config: DickyConfig): ResolvedConfig {
       completionTtlMs: config.retention?.completionTtlMs ?? DEFAULT_RETENTION.completionTtlMs,
       invocationTtlMs: config.retention?.invocationTtlMs ?? DEFAULT_RETENTION.invocationTtlMs,
       journalTtlMs: config.retention?.journalTtlMs ?? DEFAULT_RETENTION.journalTtlMs,
-      idempotencyTtlMs:
-        config.retention?.idempotencyTtlMs ?? DEFAULT_RETENTION.idempotencyTtlMs,
+      idempotencyTtlMs: config.retention?.idempotencyTtlMs ?? DEFAULT_RETENTION.idempotencyTtlMs,
     },
     shutdown: {
       handleSignals: config.shutdown?.handleSignals ?? DEFAULT_SHUTDOWN.handleSignals,
@@ -90,6 +89,10 @@ function validateConfig(config: ResolvedConfig): void {
   ensurePositive(config.retention.invocationTtlMs, "retention.invocationTtlMs");
   ensurePositive(config.retention.journalTtlMs, "retention.journalTtlMs");
   ensurePositive(config.retention.idempotencyTtlMs, "retention.idempotencyTtlMs");
+
+  if (config.redis.pool?.size !== undefined) {
+    ensurePositive(config.redis.pool.size, "redis.pool.size");
+  }
 }
 
 function ensurePositive(value: number, field: string): void {

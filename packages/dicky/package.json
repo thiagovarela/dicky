@@ -5,6 +5,20 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./adapters/bun": {
+      "types": "./dist/adapters/bun.d.ts",
+      "default": "./dist/adapters/bun.js"
+    },
+    "./adapters/ioredis": {
+      "types": "./dist/adapters/ioredis.d.ts",
+      "default": "./dist/adapters/ioredis.js"
+    }
+  },
   "scripts": {
     "dev": "bun --hot --watch",
     "build": "bun run build-ts && bun run bundle-dist",

@@ -145,15 +145,23 @@ export interface InvokeOptions extends SendOptions {
 }
 
 // Configuration
+export type RedisAdapter = "ioredis" | "bun";
+
+export interface RedisPoolConfig {
+  size?: number;
+}
+
 export interface RedisConfig {
-  host: string;
-  port: number;
+  host?: string;
+  port?: number;
   password?: string;
   db?: number;
   keyPrefix?: string;
   tls?: boolean;
   url?: string;
   driver?: RedisDriver;
+  adapter?: RedisAdapter;
+  pool?: RedisPoolConfig;
   client?: RedisClient;
   blockingClient?: RedisClient;
   factory?: (url: string) => Promise<RedisClient>;
@@ -264,6 +272,4 @@ export type HandlerDef<TArgs = unknown, TResult = unknown> =
 type HandlerFnOf<H> = H extends { handler: infer F } ? F : H;
 
 export type ArgsOf<H> = HandlerFnOf<H> extends (ctx: any, args: infer A) => any ? A : never;
-export type ReturnOf<H> = HandlerFnOf<H> extends (...args: any[]) => Promise<infer R>
-  ? R
-  : never;
+export type ReturnOf<H> = HandlerFnOf<H> extends (...args: any[]) => Promise<infer R> ? R : never;

@@ -36,6 +36,7 @@ import { WorkerImpl } from "./worker";
 import { createLogger } from "./workerLogger";
 import type { Logger } from "./workerLogger";
 import { LuaScriptsImpl } from "./lua";
+import { RedisAdapterPool } from "./adapters/pool";
 import { resolveConfig } from "./config";
 import { keys, validateIdentifier } from "./utils";
 import { TimeoutError } from "./errors";
@@ -54,6 +55,7 @@ export class Dicky<R extends Registry = {}> {
   private dlq: DLQStore | null = null;
   private logger: Logger;
   private completionRedis: RedisClient | null = null;
+  private redisPool: RedisAdapterPool | null = null;
   private signalHandlers = new Map<NodeJS.Signals, () => void>();
   private stopping = false;
 
@@ -244,18 +246,23 @@ export class Dicky<R extends Registry = {}> {
 
     await this.worker?.stop();
 
-    if (this.blockingRedis && this.blockingRedis !== this.redis) {
-      await this.blockingRedis.quit();
-    }
-    if (
-      this.completionRedis &&
-      this.completionRedis !== this.redis &&
-      this.completionRedis !== this.blockingRedis
-    ) {
-      await this.completionRedis.quit();
-    }
-    if (this.redis) {
-      await this.redis.quit();
+    if (this.redisPool) {
+      await this.redisPool.close();
+      this.redisPool = null;
+    } else {
+      if (this.blockingRedis && this.blockingRedis !== this.redis) {
+        await this.blockingRedis.quit();
+      }
+      if (
+        this.completionRedis &&
+        this.completionRedis !== this.redis &&
+        this.completionRedis !== this.blockingRedis
+      ) {
+        await this.completionRedis.quit();
+      }
+      if (this.redis) {
+        await this.redis.quit();
+      }
     }
 
     this.started = false;
@@ -305,13 +312,7 @@ export class Dicky<R extends Registry = {}> {
       return;
     }
 
-    await this.redis!.hmset(
-      key,
-      "status",
-      "cancelled",
-      "updatedAt",
-      String(Date.now()),
-    );
+    await this.redis!.hmset(key, "status", "cancelled", "updatedAt", String(Date.now()));
     await this.redis!.pexpire(key, this.config.retention.invocationTtlMs);
     await this.redis!.pexpire(
       keys(this.config.redis.keyPrefix).journal(id),
@@ -380,6 +381,18 @@ export class Dicky<R extends Registry = {}> {
       return redisConfig.client;
     }
 
+    if (redisConfig.adapter) {
+      const poolSize = redisConfig.pool?.size ?? 3;
+      if (!this.redisPool) {
+        this.redisPool = await RedisAdapterPool.create(
+          redisConfig.adapter,
+          redisConfig.url,
+          poolSize,
+        );
+      }
+      return this.redisPool.reserve();
+    }
+
     const options = {
       url: redisConfig.url,
       ...(redisConfig.driver ? { driver: redisConfig.driver } : {}),
@@ -400,6 +413,10 @@ export class Dicky<R extends Registry = {}> {
       return redisConfig.blockingFactory(redisConfig.url);
     }
 
+    if (this.redisPool) {
+      return this.redisPool.reserve();
+    }
+
     if (primary instanceof IoredisClient) {
       const duplicate = primary.raw.duplicate();
       await duplicate.ping();
@@ -410,6 +427,10 @@ export class Dicky<R extends Registry = {}> {
   }
 
   private async createCompletionRedisClient(primary: RedisClient): Promise<RedisClient> {
+    if (this.redisPool) {
+      return this.redisPool.reserve();
+    }
+
     if (primary instanceof IoredisClient) {
       const duplicate = primary.raw.duplicate();
       await duplicate.ping();
@@ -431,10 +452,7 @@ export class Dicky<R extends Registry = {}> {
     }
   }
 
-  private async adjustMetricsForCancel(
-    serviceName: string,
-    status?: string,
-  ): Promise<void> {
+  private async adjustMetricsForCancel(serviceName: string, status?: string): Promise<void> {
     if (!this.redis) {
       return;
     }
@@ -528,7 +546,9 @@ function parseCompletionPayload(raw: string): unknown {
   throw new Error(payload.error ?? "Invocation failed");
 }
 
-function normalizeHandlers(handlers: Record<string, HandlerDef>): Record<string, RegisteredHandler> {
+function normalizeHandlers(
+  handlers: Record<string, HandlerDef>,
+): Record<string, RegisteredHandler> {
   const normalized: Record<string, RegisteredHandler> = {};
   for (const [name, def] of Object.entries(handlers)) {
     if (typeof def === "function") {
@@ -543,4 +563,3 @@ function normalizeHandlers(handlers: Record<string, HandlerDef>): Record<string,
   }
   return normalized;
 }
-

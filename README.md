@@ -169,6 +169,38 @@ npm install dicky
 - Node.js 20+
 - Redis 7.0+ (with Streams support)
 
+## Redis Client Adapters
+
+Dicky can create adapter-backed clients from a URL. Set `redis.adapter` to
+`"bun"` or `"ioredis"` and optionally tune the connection pool size.
+
+```ts
+import { Dicky } from "@dicky/dicky";
+
+const dicky = new Dicky({
+  redis: {
+    url: "redis://localhost:6379",
+    adapter: "bun", // or "ioredis"
+    pool: { size: 3 },
+  },
+});
+```
+
+You can still supply your own client via `redis.client` when needed:
+
+```ts
+import Redis from "ioredis";
+import { Dicky } from "@dicky/dicky";
+import { ioredisAdapter } from "@dicky/dicky/adapters/ioredis";
+
+const raw = new Redis("redis://localhost:6379");
+const dicky = new Dicky({
+  redis: {
+    client: ioredisAdapter(raw),
+  },
+});
+```
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)

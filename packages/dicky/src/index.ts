@@ -17,3 +17,5 @@ export * from "./stores/awakeable";
 export * from "./stores/lock";
 export * from "./stores/stream";
 export * from "./stores/dlq";
+export * from "./adapters/bun";
+export * from "./adapters/ioredis";

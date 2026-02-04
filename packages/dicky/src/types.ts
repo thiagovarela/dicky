@@ -90,12 +90,7 @@ export interface DurableContext<TState = unknown> {
   sleep(name: string, duration: string): Promise<void>;
 
   // Invoke another handler and await result
-  invoke<T>(
-    service: string,
-    handler: string,
-    args?: unknown,
-    opts?: { key?: string },
-  ): Promise<T>;
+  invoke<T>(service: string, handler: string, args?: unknown, opts?: { key?: string }): Promise<T>;
 
   // Fire-and-forget dispatch
   send(

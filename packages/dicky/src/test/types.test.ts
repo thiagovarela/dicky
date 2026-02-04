@@ -10,11 +10,8 @@ import type {
   ServiceDef,
 } from "../types.js";
 
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B
-  ? 1
-  : 2
-  ? true
-  : false;
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
 type Expect<T extends true> = T;
 
@@ -26,11 +23,7 @@ type _ReturnExtract = Expect<Equal<ReturnOf<ExampleHandler>, number>>;
 
 type ExampleService = ServiceDef<"onboarding", { welcome: ExampleHandler }>;
 
-type ExampleObject = ObjectDef<
-  "counter",
-  { count: number },
-  { increment: ExampleHandler }
->;
+type ExampleObject = ObjectDef<"counter", { count: number }, { increment: ExampleHandler }>;
 
 type _ServiceKind = Expect<Equal<ExampleService["__kind"], "service">>;
 
@@ -60,15 +53,7 @@ type TypeAssertions = [
   _RegistryKeepsBase,
 ];
 
-const typeAssertions: TypeAssertions = [
-  true,
-  true,
-  true,
-  true,
-  true,
-  true,
-  true,
-];
+const typeAssertions: TypeAssertions = [true, true, true, true, true, true, true];
 
 void typeAssertions;
 

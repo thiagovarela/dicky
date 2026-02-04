@@ -13,8 +13,10 @@
     "test": "bun test",
     "lint": "oxlint src",
     "lint:fix": "oxlint src --fix",
+    "lint:files": "oxlint",
     "format": "oxfmt src",
     "format:check": "oxfmt src --check",
+    "format:files": "oxfmt",
     "clean": "rm -rf dist"
   },
   "dependencies": {

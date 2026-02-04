@@ -31,8 +31,13 @@ export function parseDuration(duration: string): number {
     throw new Error(`Invalid duration format: ${duration}`);
   }
 
-  const value = Number.parseInt(match[1], 10);
-  const unit = match[2] as "ms" | "s" | "m" | "h" | "d";
+  const [, rawValue, rawUnit] = match;
+  if (!rawValue || !rawUnit) {
+    throw new Error(`Invalid duration format: ${duration}`);
+  }
+
+  const value = Number.parseInt(rawValue, 10);
+  const unit = rawUnit as "ms" | "s" | "m" | "h" | "d";
 
   const multipliers = {
     ms: 1,

@@ -7,11 +7,7 @@ export interface SerializedError {
   [key: string]: unknown;
 }
 
-function finalizeError<T extends Error>(
-  error: T,
-  name: string,
-  ctor: Function,
-): T {
+function finalizeError<T extends Error>(error: T, name: string, ctor: Function): T {
   error.name = name;
   Object.setPrototypeOf(error, ctor.prototype);
   if (Error.captureStackTrace) {
@@ -33,11 +29,12 @@ export function serializeError(error: Error): SerializedError {
     serialized.stack = error.stack;
   }
 
+  const errorRecord = error as unknown as Record<string, unknown>;
   for (const key of Object.getOwnPropertyNames(error)) {
     if (key === "name" || key === "message" || key === "stack") {
       continue;
     }
-    serialized[key] = (error as Record<string, unknown>)[key];
+    serialized[key] = errorRecord[key];
   }
 
   return serialized;
@@ -93,20 +90,18 @@ export function deserializeError(serialized: SerializedError): Error {
       return applyStack(error);
     }
     case "DQError": {
-      const error = new DQError(
-        serialized.code as string,
-        serialized.message as string,
-      );
+      const error = new DQError(serialized.code as string, serialized.message as string);
       return applyStack(error);
     }
     default: {
       const error = new Error(serialized.message);
       error.name = serialized.name;
+      const errorRecord = error as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(serialized)) {
         if (key === "name" || key === "message" || key === "stack") {
           continue;
         }
-        (error as Record<string, unknown>)[key] = value;
+        errorRecord[key] = value;
       }
       return applyStack(error);
     }

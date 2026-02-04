@@ -18,8 +18,7 @@ describe("parseDuration", () => {
   });
 
   it("throws on invalid duration", () => {
-    expect(() => parseDuration("5"))
-      .toThrow("Invalid duration format: 5");
+    expect(() => parseDuration("5")).toThrow("Invalid duration format: 5");
   });
 });
 

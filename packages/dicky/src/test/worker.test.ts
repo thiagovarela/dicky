@@ -318,4 +318,37 @@ describe("Worker", () => {
 
     expect(handled).toBe(true);
   });
+
+  it("computeRetryDelay adds jitter to prevent thundering herd", async () => {
+    const { computeRetryDelay } = await import("../worker");
+    const retryConfig = {
+      initialDelayMs: 1000,
+      maxDelayMs: 30000,
+      backoffMultiplier: 2,
+    };
+
+    // Test that jitter produces different values for the same input
+    const delays = Array.from({ length: 100 }, () => computeRetryDelay(1, retryConfig));
+    const unique = new Set(delays);
+    expect(unique.size).toBeGreaterThan(1); // Should have different values due to jitter
+
+    // Test that delays are within expected range (base * multiplier ± 25%)
+    const expectedBase = retryConfig.initialDelayMs * retryConfig.backoffMultiplier; // 2000ms
+    const minExpected = expectedBase * 0.75; // 1500ms
+    const maxExpected = expectedBase * 1.25; // 2500ms
+
+    for (const delay of delays) {
+      expect(delay).toBeGreaterThanOrEqual(minExpected);
+      expect(delay).toBeLessThanOrEqual(maxExpected);
+    }
+
+    // Test max delay capping with jitter
+    const highAttempt = 10; // Would normally exceed maxDelayMs
+    const cappedDelays = Array.from({ length: 10 }, () =>
+      computeRetryDelay(highAttempt, retryConfig),
+    );
+    for (const delay of cappedDelays) {
+      expect(delay).toBeLessThanOrEqual(retryConfig.maxDelayMs * 1.25);
+    }
+  });
 });

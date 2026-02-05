@@ -293,7 +293,8 @@ export class WorkerImpl implements Worker {
       const result = await handlerDef.handler(ctx, parsedArgs);
       const validatedResult = handlerDef.output ? handlerDef.output.parse(result) : result;
 
-      const serializedResult = validatedResult !== undefined ? JSON.stringify(validatedResult) : undefined;
+      const serializedResult =
+        validatedResult !== undefined ? JSON.stringify(validatedResult) : undefined;
       await this.completeInvocation(invocation, serializedResult);
       await this.ack(serviceName, msg.messageId);
       await this.publishCompletion(invocation.id, "completed", serializedResult);
@@ -568,9 +569,13 @@ function isNoGroupError(err: unknown): boolean {
   return err.message.includes("NOGROUP");
 }
 
-function computeRetryDelay(attempt: number, retry: ResolvedConfig["retry"]): number {
+export function computeRetryDelay(attempt: number, retry: ResolvedConfig["retry"]): number {
   const base = retry.initialDelayMs;
   const multiplier = retry.backoffMultiplier;
   const delay = base * Math.pow(multiplier, attempt);
-  return Math.min(delay, retry.maxDelayMs);
+  const capped = Math.min(delay, retry.maxDelayMs);
+
+  // Add ±25% jitter to prevent thundering herd
+  const jitter = capped * 0.25 * (Math.random() * 2 - 1);
+  return Math.round(capped + jitter);
 }

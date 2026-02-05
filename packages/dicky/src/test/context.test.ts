@@ -217,4 +217,28 @@ describe("DurableContext", () => {
     await ctx.setState({ count: 0 });
     expect(ctx.state).toEqual({ count: 7 });
   });
+
+  it("replays send only for completed status", async () => {
+    const { ctx, journal, streamProducer } = createContext("inv_send_replay");
+    
+    // Test 1: Completed send is replayed (doesn't dispatch again)
+    await journal.write({
+      invocationId: "inv_send_replay",
+      sequence: 0,
+      type: "send",
+      name: "svc.handler",
+      status: "completed",
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+    });
+
+    await ctx.send("svc", "handler", { test: true });
+    expect(streamProducer.dispatchCalls).toHaveLength(0); // Should not dispatch
+
+    // Test 2: Fresh context with no journal entry should dispatch
+    const { ctx: ctx2, streamProducer: streamProducer2 } = createContext("inv_send_fresh");
+    
+    await ctx2.send("svc", "handler", { test: true });
+    expect(streamProducer2.dispatchCalls).toHaveLength(1); // Should dispatch
+  });
 });

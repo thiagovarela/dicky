@@ -182,7 +182,7 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
     const seq = this.sequence++;
     const existing = await this.journal.get(this.invocationId, seq);
 
-    if (existing) {
+    if (existing?.status === "completed") {
       return;
     }
 

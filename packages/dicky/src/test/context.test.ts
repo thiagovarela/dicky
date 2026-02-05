@@ -217,4 +217,58 @@ describe("DurableContext", () => {
     await ctx.setState({ count: 0 });
     expect(ctx.state).toEqual({ count: 7 });
   });
+
+  it("handles send replay correctly for all statuses", async () => {
+    // Test 1: Completed send is replayed (doesn't dispatch again)
+    const {
+      ctx: ctx1,
+      journal: journal1,
+      streamProducer: streamProducer1,
+    } = createContext("inv_send_completed");
+    await journal1.write({
+      invocationId: "inv_send_completed",
+      sequence: 0,
+      type: "send",
+      name: "svc.handler",
+      status: "completed",
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+    });
+
+    await ctx1.send("svc", "handler", { test: true });
+    expect(streamProducer1.dispatchCalls).toHaveLength(0); // Should not dispatch
+
+    // Test 2: Failed send throws ReplayError
+    const { ctx: ctx2, journal: journal2 } = createContext("inv_send_failed");
+    await journal2.write({
+      invocationId: "inv_send_failed",
+      sequence: 0,
+      type: "send",
+      name: "svc.handler",
+      status: "failed",
+      error: "Send operation failed",
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+    });
+
+    await expect(ctx2.send("svc", "handler", { test: true })).rejects.toBeInstanceOf(ReplayError);
+
+    // Test 3: Pending send throws ReplayError (should never happen)
+    const { ctx: ctx3, journal: journal3 } = createContext("inv_send_pending");
+    await journal3.write({
+      invocationId: "inv_send_pending",
+      sequence: 0,
+      type: "send",
+      name: "svc.handler",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+
+    await expect(ctx3.send("svc", "handler", { test: true })).rejects.toBeInstanceOf(ReplayError);
+
+    // Test 4: Fresh context with no journal entry should dispatch normally
+    const { ctx: ctx4, streamProducer: streamProducer4 } = createContext("inv_send_fresh");
+    await ctx4.send("svc", "handler", { test: true });
+    expect(streamProducer4.dispatchCalls).toHaveLength(1); // Should dispatch
+  });
 });

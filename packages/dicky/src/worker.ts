@@ -409,7 +409,8 @@ export class WorkerImpl implements Worker {
         : []),
     );
 
-    await this.incrementMetrics(serviceName, { pending: 1 });
+    // Note: pending metric is already incremented in StreamProducer.dispatch()
+    // when the invocation is initially created, so we don't double-count here
 
     return invocation;
   }

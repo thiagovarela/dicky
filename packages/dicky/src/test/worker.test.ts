@@ -319,6 +319,67 @@ describe("Worker", () => {
     expect(handled).toBe(true);
   });
 
+  it("does not double-count pending metrics", async () => {
+    const { worker, redis } = createWorker(async () => ({ ok: true }));
+
+    // Simulate a dispatched invocation that gets processed
+    const invocationId = "inv_metrics_test";
+
+    // First, create the invocation record as StreamProducer.dispatch() would
+    const invKey = `${prefix}invocation:${invocationId}`;
+    await redis.hmset(
+      invKey,
+      "id",
+      invocationId,
+      "service",
+      "svc",
+      "handler",
+      "handler",
+      "args",
+      '{"test": true}',
+      "status",
+      "pending",
+      "attempt",
+      "0",
+      "maxRetries",
+      "2",
+      "createdAt",
+      String(Date.now()),
+      "updatedAt",
+      String(Date.now()),
+    );
+
+    // Increment pending metrics as dispatch() would
+    const metricsKey = `${prefix}metrics:svc`;
+    await redis.hincrby(metricsKey, "pending", 1);
+
+    // Get baseline pending count
+    const beforePending = Number.parseInt((await redis.hget(metricsKey, "pending")) ?? "0", 10);
+    expect(beforePending).toBe(1);
+
+    // Process the message through the worker
+    const msg: StreamMessage = {
+      messageId: "1-0",
+      invocationId,
+      handler: "handler",
+      args: '{"test": true}',
+      attempt: "0",
+    };
+
+    const workerAny = worker as unknown as {
+      processMessage: (serviceName: string, message: StreamMessage) => Promise<void>;
+    };
+
+    await workerAny.processMessage("svc", msg);
+
+    // Verify that pending was decremented (moved to completed) but not double-incremented
+    const afterPending = Number.parseInt((await redis.hget(metricsKey, "pending")) ?? "0", 10);
+    const completed = Number.parseInt((await redis.hget(metricsKey, "completed")) ?? "0", 10);
+
+    expect(afterPending).toBe(0); // Should be decremented from 1 to 0
+    expect(completed).toBe(1); // Should have 1 completed
+  });
+
   it("computeRetryDelay adds jitter to prevent thundering herd", async () => {
     const { computeRetryDelay } = await import("../worker");
     const retryConfig = {

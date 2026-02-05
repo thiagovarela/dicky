@@ -186,6 +186,19 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
       return;
     }
 
+    if (existing?.status === "failed") {
+      throw new ReplayError(`${service}.${handler}`, existing.error ?? "Unknown error");
+    }
+
+    if (existing?.status === "pending") {
+      // Send operations should never be pending since they're fire-and-forget
+      // and immediately marked as completed. If we see this, something is wrong.
+      throw new ReplayError(
+        `${service}.${handler}`,
+        "Send operation found in pending state - this should never happen",
+      );
+    }
+
     const dispatchOpts = {
       ...(opts?.key ? { key: opts.key } : {}),
       ...(opts?.delay ? { delay: opts.delay } : {}),
@@ -294,7 +307,10 @@ export class DurableContextImpl<TState = unknown> implements DurableContext<TSta
 }
 
 class SerializationError extends Error {
-  constructor(message: string, readonly original: Error = new Error(message)) {
+  constructor(
+    message: string,
+    readonly original: Error = new Error(message),
+  ) {
     super(message);
     this.name = "SerializationError";
   }

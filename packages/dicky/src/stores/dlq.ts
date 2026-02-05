@@ -68,7 +68,6 @@ export class DLQStoreImpl implements DLQStore {
     const streamKey = keys(this.prefix).stream(invocation.service);
     const handler = invocation.handler ?? "";
     const args = invocation.args ?? "";
-    const attempt = invocation.attempt ?? "0";
 
     await this.redis.xadd(
       streamKey,
@@ -77,7 +76,7 @@ export class DLQStoreImpl implements DLQStore {
         invocationId: id,
         handler,
         args,
-        attempt,
+        attempt: "0", // Reset attempt counter for retry
         ...(invocation.key ? { key: invocation.key } : {}),
       }),
     );
@@ -86,6 +85,8 @@ export class DLQStoreImpl implements DLQStore {
       invKey,
       "status",
       "pending",
+      "attempt", 
+      "0", // Reset attempt counter in invocation hash
       "updatedAt",
       String(Date.now()),
     );

@@ -324,28 +324,37 @@ describe("Worker", () => {
 
     // Simulate a dispatched invocation that gets processed
     const invocationId = "inv_metrics_test";
-    
+
     // First, create the invocation record as StreamProducer.dispatch() would
     const invKey = `${prefix}invocation:${invocationId}`;
     await redis.hmset(
       invKey,
-      "id", invocationId,
-      "service", "svc",
-      "handler", "handler",
-      "args", '{"test": true}',
-      "status", "pending",
-      "attempt", "0",
-      "maxRetries", "2",
-      "createdAt", String(Date.now()),
-      "updatedAt", String(Date.now()),
+      "id",
+      invocationId,
+      "service",
+      "svc",
+      "handler",
+      "handler",
+      "args",
+      '{"test": true}',
+      "status",
+      "pending",
+      "attempt",
+      "0",
+      "maxRetries",
+      "2",
+      "createdAt",
+      String(Date.now()),
+      "updatedAt",
+      String(Date.now()),
     );
-    
+
     // Increment pending metrics as dispatch() would
     const metricsKey = `${prefix}metrics:svc`;
     await redis.hincrby(metricsKey, "pending", 1);
-    
+
     // Get baseline pending count
-    const beforePending = Number.parseInt(await redis.hget(metricsKey, "pending") ?? "0", 10);
+    const beforePending = Number.parseInt((await redis.hget(metricsKey, "pending")) ?? "0", 10);
     expect(beforePending).toBe(1);
 
     // Process the message through the worker
@@ -364,10 +373,43 @@ describe("Worker", () => {
     await workerAny.processMessage("svc", msg);
 
     // Verify that pending was decremented (moved to completed) but not double-incremented
-    const afterPending = Number.parseInt(await redis.hget(metricsKey, "pending") ?? "0", 10);
-    const completed = Number.parseInt(await redis.hget(metricsKey, "completed") ?? "0", 10);
-    
+    const afterPending = Number.parseInt((await redis.hget(metricsKey, "pending")) ?? "0", 10);
+    const completed = Number.parseInt((await redis.hget(metricsKey, "completed")) ?? "0", 10);
+
     expect(afterPending).toBe(0); // Should be decremented from 1 to 0
     expect(completed).toBe(1); // Should have 1 completed
+  });
+
+  it("computeRetryDelay adds jitter to prevent thundering herd", async () => {
+    const { computeRetryDelay } = await import("../worker");
+    const retryConfig = {
+      initialDelayMs: 1000,
+      maxDelayMs: 30000,
+      backoffMultiplier: 2,
+    };
+
+    // Test that jitter produces different values for the same input
+    const delays = Array.from({ length: 100 }, () => computeRetryDelay(1, retryConfig));
+    const unique = new Set(delays);
+    expect(unique.size).toBeGreaterThan(1); // Should have different values due to jitter
+
+    // Test that delays are within expected range (base * multiplier ± 25%)
+    const expectedBase = retryConfig.initialDelayMs * retryConfig.backoffMultiplier; // 2000ms
+    const minExpected = expectedBase * 0.75; // 1500ms
+    const maxExpected = expectedBase * 1.25; // 2500ms
+
+    for (const delay of delays) {
+      expect(delay).toBeGreaterThanOrEqual(minExpected);
+      expect(delay).toBeLessThanOrEqual(maxExpected);
+    }
+
+    // Test max delay capping with jitter
+    const highAttempt = 10; // Would normally exceed maxDelayMs
+    const cappedDelays = Array.from({ length: 10 }, () =>
+      computeRetryDelay(highAttempt, retryConfig),
+    );
+    for (const delay of cappedDelays) {
+      expect(delay).toBeLessThanOrEqual(retryConfig.maxDelayMs * 1.25);
+    }
   });
 });

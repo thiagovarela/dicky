@@ -1,5 +1,6 @@
 import type { Logger } from "./workerLogger";
 import { SuspendedError } from "./errors";
+import { ZodError } from "zod";
 import type { Invocation, InvocationId, RegisteredService, ResolvedConfig } from "./types";
 import { parseInvocationRecord } from "./invocation";
 import { flattenFields, keys, newWorkerId } from "./utils";
@@ -317,6 +318,21 @@ export class WorkerImpl implements Worker {
       if (err instanceof SuspendedError) {
         await this.setInvocationStatus(invocation, "suspended");
         await this.ack(serviceName, msg.messageId);
+        return;
+      }
+
+      // ZodError is deterministic — retrying will never succeed
+      if (err instanceof ZodError) {
+        const errorMsg = `Validation error: ${err.message}`;
+        await this.dlq.push(invocation, errorMsg);
+        await this.failInvocation(invocation, errorMsg);
+        await this.ack(serviceName, msg.messageId);
+        await this.publishCompletion(invocation.id, "failed", undefined, errorMsg);
+
+        if (invocation.parentId != null && invocation.parentStep != null) {
+          await this.journal.fail(invocation.parentId, invocation.parentStep, errorMsg);
+          await this.streamProducer.reenqueue(invocation.parentId);
+        }
         return;
       }
 

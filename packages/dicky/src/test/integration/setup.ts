@@ -86,6 +86,23 @@ export async function waitForInvocation(
   throw new Error(`Timeout waiting for invocation ${id} to be ${expectedStatus}`);
 }
 
+export async function waitForDLQEntry(
+  dicky: Dicky,
+  service: string,
+  invocationId: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entries = await dicky.listDLQ(service);
+    if (entries.some((e) => e.invocationId === invocationId)) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(`Timeout waiting for DLQ entry ${invocationId} in ${service}`);
+}
+
 export async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }

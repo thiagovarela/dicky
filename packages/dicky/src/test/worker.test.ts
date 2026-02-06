@@ -412,4 +412,28 @@ describe("Worker", () => {
       expect(delay).toBeLessThanOrEqual(retryConfig.maxDelayMs * 1.25);
     }
   });
+
+  it("routes unknown handler to DLQ", async () => {
+    const { worker, dlq } = createWorker(async () => "ok");
+
+    const msg: StreamMessage = {
+      messageId: "5-0",
+      invocationId: "inv_unknown",
+      handler: "unknownHandler",
+      args: JSON.stringify({}),
+      attempt: "0",
+    };
+
+    const workerAny = worker as unknown as {
+      processMessage: (serviceName: string, message: StreamMessage) => Promise<void>;
+    };
+
+    await workerAny.processMessage("svc", msg);
+
+    const entries = await dlq.list("svc");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.invocationId).toBe("inv_unknown");
+    expect(entries[0]?.error).toContain("Unknown handler");
+    expect(entries[0]?.handler).toBe("unknownHandler");
+  });
 });

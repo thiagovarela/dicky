@@ -284,7 +284,17 @@ export class WorkerImpl implements Worker {
       const handlerDef = service.handlers[msg.handler];
       if (!handlerDef) {
         this.logger.warn?.({ serviceName, handler: msg.handler }, "Unknown handler");
+        const errorMsg = `Unknown handler: ${msg.handler}`;
+        await this.setInvocationStatus(invocation, "running");
+        await this.dlq.push(invocation, errorMsg);
+        await this.failInvocation(invocation, errorMsg);
         await this.ack(serviceName, msg.messageId);
+        await this.publishCompletion(invocation.id, "failed", undefined, errorMsg);
+
+        if (invocation.parentId != null && invocation.parentStep != null) {
+          await this.journal.fail(invocation.parentId, invocation.parentStep, errorMsg);
+          await this.streamProducer.reenqueue(invocation.parentId);
+        }
         return;
       }
 

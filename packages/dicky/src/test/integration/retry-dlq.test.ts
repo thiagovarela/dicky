@@ -9,8 +9,10 @@ import {
   startRedis,
   stopRedis,
   testConfig,
+  waitForDLQEntry,
   waitForInvocation,
 } from "./setup";
+import { keys } from "../../utils";
 
 (integrationEnabled ? describe : describe.skip)("Integration: Retry and DLQ", () => {
   const prefix = "test:retry:";
@@ -125,6 +127,52 @@ import {
     await waitForInvocation(dicky, id, "completed", 10_000);
     const inv = await dicky.getInvocation(id);
     expect(inv?.status).toBe("completed");
+
+    await dicky.stop();
+    await clearRedis(prefix);
+  });
+
+  it("routes unknown handler to DLQ", async () => {
+    const dicky = new Dicky(
+      buildIntegrationConfig({
+        redis: { ...testConfig.redis, keyPrefix: prefix },
+      }),
+    );
+
+    dicky.use(
+      service("test-svc", {
+        knownHandler: {
+          input: emptySchema,
+          output: z.string(),
+          handler: async (_ctx, _args: {}) => "ok",
+        },
+      }),
+    );
+
+    await dicky.start();
+
+    // Manually dispatch a message with unknown handler by directly writing to stream
+    const streamKey = keys(prefix).stream("test-svc");
+    await dicky.redis!.xadd(
+      streamKey,
+      "*",
+      "invocationId",
+      "inv_unknown",
+      "handler",
+      "unknownHandler",
+      "args",
+      "{}",
+      "attempt",
+      "0",
+    );
+
+    // Wait for the DLQ entry to appear
+    await waitForDLQEntry(dicky, "test-svc", "inv_unknown", 5_000);
+
+    const dlq = await dicky.listDLQ("test-svc");
+    const entry = dlq.find((e) => e.invocationId === "inv_unknown");
+    expect(entry).toBeDefined();
+    expect(entry?.error).toContain("Unknown handler");
 
     await dicky.stop();
     await clearRedis(prefix);
